@@ -18,6 +18,7 @@ local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -41,6 +42,10 @@ local SAME_TIER_EPSILON = 0.25 -- platforms whose tops match this closely are dr
 local PLATFORM_STAND_TOLERANCE = 0.6
 local PLATFORM_RISING_TOLERANCE = 0.1
 local DRIFT_TOLERANCE = 1
+local PAD_COOLDOWN = 0.4
+local PAD_REACH_BELOW = 1.5 -- pads are non-colliding 1-stud slabs on the floor; feet rest at their bottom
+local PAD_REACH_ABOVE = 1
+local PLAYER_MODULE_TIMEOUT = 30
 
 type CharacterState = {
 	Character: Model,
@@ -71,6 +76,9 @@ local platformIgnoredUntil: { [BasePart]: number } = {}
 local platformListDirty = true
 local platformRaycastParams = RaycastParams.new()
 platformRaycastParams.FilterType = Enum.RaycastFilterType.Include
+
+local jumpPads: { [BasePart]: boolean } = {}
+local lastPadLaunch = 0
 
 local dashStartedEvent = Instance.new("BindableEvent")
 
@@ -153,6 +161,55 @@ local function dropThrough(state: CharacterState, standingOn: BasePart)
 	state.Root.AssemblyLinearVelocity = Vector3.new(velocity.X, DROP_NUDGE_SPEED, 0)
 end
 
+-- The client owns its character's physics, so pads launch it here rather than on the server.
+local function updateJumpPads(state: CharacterState)
+	local now = os.clock()
+	if now - lastPadLaunch < PAD_COOLDOWN then
+		return
+	end
+	local position = state.Root.Position
+	local feetY = position.Y - getFeetOffset(state)
+	for pad in jumpPads do
+		local padTop = pad.Position.Y + pad.Size.Y / 2
+		if math.abs(position.X - pad.Position.X) <= pad.Size.X / 2
+			and feetY >= padTop - pad.Size.Y - PAD_REACH_BELOW and feetY <= padTop + PAD_REACH_ABOVE then
+			lastPadLaunch = now
+			airJumpsUsed = 0
+			state.Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+			state.Root.AssemblyLinearVelocity = Vector3.new(state.Root.AssemblyLinearVelocity.X, Physics25D.JUMP_PAD_VELOCITY, 0)
+			return
+		end
+	end
+end
+
+-- Keyboard / gamepad input for when the default PlayerModule is unavailable (it never loaded, or is still
+-- loading). Returns a ControlModule-style move vector (Z > 0 is "down") and whether jump is held.
+local function readFallbackInput(): (Vector3, boolean)
+	if UserInputService:GetFocusedTextBox() then
+		return Vector3.zero, false
+	end
+	local x, z = 0, 0
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then
+		x += 1
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left) then
+		x -= 1
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down) then
+		z = 1
+	end
+	local jump = UserInputService:IsKeyDown(Enum.KeyCode.Space)
+	if UserInputService:GetGamepadConnected(Enum.UserInputType.Gamepad1) then
+		for _, input in UserInputService:GetGamepadState(Enum.UserInputType.Gamepad1) do
+			if input.KeyCode == Enum.KeyCode.Thumbstick1 and input.Position.Magnitude > STICK_DEADZONE then
+				x, z = input.Position.X, -input.Position.Y
+			end
+		end
+		jump = jump or UserInputService:IsGamepadButtonDown(Enum.UserInputType.Gamepad1, Enum.KeyCode.ButtonA)
+	end
+	return Vector3.new(x, 0, z), jump
+end
+
 local function canAirJump(humanoid: Humanoid): boolean
 	local humanoidState = humanoid:GetState()
 	return humanoidState == Enum.HumanoidStateType.Freefall or humanoidState == Enum.HumanoidStateType.Jumping
@@ -174,7 +231,14 @@ local function onInputStep()
 		return
 	end
 
-	local moveVector: Vector3 = if controls then controls:GetMoveVector() else Vector3.zero
+	local moveVector: Vector3
+	if controls then
+		moveVector = controls:GetMoveVector()
+	else
+		local fallbackJump
+		moveVector, fallbackJump = readFallbackInput()
+		humanoid.Jump = fallbackJump
+	end
 	local horizontal = moveVector.X
 	if math.abs(horizontal) < STICK_DEADZONE then
 		horizontal = 0
@@ -218,6 +282,10 @@ local function onInputStep()
 	elseif airJumpsUsed < mobility.AirJumps and canAirJump(humanoid) then
 		airJumpsUsed += 1
 		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		-- ChangeState alone does not reliably re-apply jump power mid-air; set the full jump speed directly.
+		local velocity = state.Root.AssemblyLinearVelocity
+		local jumpSpeed = math.sqrt(2 * Workspace.Gravity * mobility.JumpHeight)
+		state.Root.AssemblyLinearVelocity = Vector3.new(velocity.X, math.max(velocity.Y, jumpSpeed), 0)
 	end
 end
 
@@ -271,6 +339,7 @@ local function onPreSimulation(dt: number)
 	end
 	updateDash(state, dt)
 	updatePlatformCollision(state)
+	updateJumpPads(state)
 
 	local z = state.Root.Position.Z
 	if math.abs(z - Physics25D.PLANE_Z) > DRIFT_TOLERANCE then
@@ -375,14 +444,48 @@ function Movement25DController.GetDashCharges(): (number, number, number)
 end
 
 function Movement25DController.Init()
-	local playerModule = player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule")
-	controls = (require :: any)(playerModule):GetControls()
+	-- Never block Init (and every controller after it) on the PlayerModule; fallback input covers the gap.
+	task.spawn(function()
+		local playerModule = player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", PLAYER_MODULE_TIMEOUT)
+		if not playerModule then
+			local found: { string } = {}
+			for _, child in player:WaitForChild("PlayerScripts"):GetChildren() do
+				table.insert(found, child.Name)
+			end
+			warn(("[Movement25DController] PlayerModule not found; using built-in keyboard/gamepad input (no mobile thumbstick). PlayerScripts has: %s")
+				:format(table.concat(found, ", ")))
+			return
+		end
+		local ok, result = pcall(function(): any
+			return (require :: any)(playerModule):GetControls()
+		end)
+		if ok then
+			controls = result
+		else
+			warn("[Movement25DController] PlayerModule failed to load: " .. tostring(result))
+		end
+	end)
 
 	for _, instance in CollectionService:GetTagged(Physics25D.ONE_WAY_TAG) do
 		addPlatform(instance)
 	end
 	CollectionService:GetInstanceAddedSignal(Physics25D.ONE_WAY_TAG):Connect(addPlatform)
 	CollectionService:GetInstanceRemovedSignal(Physics25D.ONE_WAY_TAG):Connect(removePlatform)
+
+	local function addPad(instance: Instance)
+		if instance:IsA("BasePart") then
+			jumpPads[instance] = true
+		end
+	end
+	for _, instance in CollectionService:GetTagged(Physics25D.JUMP_PAD_TAG) do
+		addPad(instance)
+	end
+	CollectionService:GetInstanceAddedSignal(Physics25D.JUMP_PAD_TAG):Connect(addPad)
+	CollectionService:GetInstanceRemovedSignal(Physics25D.JUMP_PAD_TAG):Connect(function(instance: Instance)
+		if instance:IsA("BasePart") then
+			jumpPads[instance] = nil
+		end
+	end)
 
 	ContextActionService:BindAction(DASH_ACTION, onDashAction, true, Enum.KeyCode.LeftShift, Enum.KeyCode.K, Enum.KeyCode.ButtonB)
 	ContextActionService:SetTitle(DASH_ACTION, "Dash")

@@ -111,6 +111,16 @@ function TownHubService.Init()
 		return stationData(player, stationKey)
 	end
 
+	-- The Town Hub and every room bring their own ground and TownSpawn; Studio's template Baseplate and
+	-- SpawnLocation would only show as stray slabs (and players could spawn inside the town floor).
+	for _, name in { "Baseplate", "SpawnLocation" } do
+		local leftover = Workspace:FindFirstChild(name)
+		if leftover and leftover:IsA("BasePart") then
+			leftover:Destroy()
+		end
+	end
+	RoomBuilderService.SetupSky()
+
 	local existing = Workspace:FindFirstChild("TownHub")
 	if existing then
 		existing:Destroy()

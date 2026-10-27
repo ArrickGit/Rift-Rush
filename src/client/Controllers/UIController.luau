@@ -78,6 +78,13 @@ local LEAVE_MESSAGES: { [string]: string } = {
 	RoomError = "⚠️ The run ended early (room error).",
 }
 
+-- Left-edge buttons shown in town (buildTownMenu); each opens that station's panel from anywhere.
+local TOWN_MENU: { { Station: string, Label: string } } = {
+	{ Station = "RiftShrine", Label = "Shop" },
+	{ Station = "SparkSanctum", Label = "Ascend" },
+	{ Station = "AscensionPedestal", Label = "Rebirth" },
+}
+
 local SHRINE_PRODUCTS = { "RiftSurge", "SuperchargedRunToken", "RerollPack5", "KeepEverythingSeal", "StarForceSafeguardPack" }
 local SHRINE_PASSES = {
 	"TrueAscendant", "DoubleXP", "DoubleDust", "VIPArchitect", "BanishPass", "VaultInsurance", "RelicVaultKey",
@@ -181,6 +188,7 @@ local defeatOpen = false
 
 -- Station panels
 local stationFrame: Frame
+local townMenu: Frame
 local stationTitle: TextLabel
 local stationContent: ScrollingFrame
 local openStation: string? = nil
@@ -1246,6 +1254,43 @@ local function onOpenStation(payload: any)
 	focusFirstButton(stationContent)
 end
 
+-- Town side menu: the stations players use most open from the left edge of the screen while in town, like the
+-- shop buttons in other experiences. The panels behave exactly as if the station's prompt had been used.
+local function openStationFromMenu(key: string)
+	if openStation == key then
+		closeStation()
+		return
+	end
+	task.spawn(function()
+		local ok, data = pcall(function(): any
+			return stationDataFunction:InvokeServer(key)
+		end)
+		onOpenStation({ Station = key, Data = if ok then data else nil })
+		if openStation == key and STATION_FETCHES_DATA[key] and stationData == nil then
+			scheduleStationRefresh() -- the data request was throttled; fetch again shortly
+		end
+	end)
+end
+
+local function buildTownMenu()
+	local gui = newLayer("RiftTownMenu", 12, false)
+	townMenu = create("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0),
+		Size = UDim2.fromOffset(76, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
+	list(townMenu, Enum.FillDirection.Vertical, 10)
+	for order, entry in TOWN_MENU do
+		local look = AssetRegistry.TownStations[entry.Station]
+		local color = if look then look.Color else COLORS.Accent
+		local button = newButton(townMenu, "", COLORS.Panel, function()
+			openStationFromMenu(entry.Station)
+		end, { Size = UDim2.fromOffset(76, 76), LayoutOrder = order, BackgroundTransparency = 0.1 })
+		outline(button, color, 2)
+		newLabel(button, { Size = UDim2.new(1, 0, 0, 44), Position = UDim2.fromOffset(0, 6), Text = if look then look.Icon else "?",
+			TextSize = 30, TextXAlignment = Enum.TextXAlignment.Center })
+		newLabel(button, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, -6), Size = UDim2.new(1, 0, 0, 16),
+			Text = entry.Label, Font = Enum.Font.GothamBold, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center })
+	end
+end
+
 local function buildStationPanel()
 	local gui = newLayer("RiftStations", 30, false)
 	stationFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.55),
@@ -1350,6 +1395,8 @@ local function updateTick()
 		abilityLabel.Visible = false
 	end
 
+	townMenu.Visible = not inRun()
+
 	local combo = player:GetAttribute("Combo")
 	comboLabel.Visible = inRun() and type(combo) == "number" and combo >= 2
 	if comboLabel.Visible then
@@ -1399,6 +1446,7 @@ function UIController.Init()
 	buildAnchorModal()
 	buildDefeatScreen()
 	buildStationPanel()
+	buildTownMenu()
 
 	updateScale()
 	local function watchCamera()

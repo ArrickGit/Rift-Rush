@@ -6,7 +6,7 @@
 -- TownHubService wires its station prompts.
 
 local CollectionService = game:GetService("CollectionService")
-local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
@@ -48,12 +48,19 @@ local TILE = RoomAsciiTemplates.TILE_SIZE
 local COLUMNS = RoomAsciiTemplates.COLUMNS
 local ROWS = RoomAsciiTemplates.ROWS
 
--- A normal jump already reaches ~8 studs (velocity ~56), so pads must launch much harder to be worth stepping on.
-local JUMP_PAD_VELOCITY = 110
-local JUMP_PAD_COOLDOWN = 0.4
 local PLATFORM_THICKNESS = 1
 local GRASS_THICKNESS = 0.8
-local BACKDROP_Z = -12
+-- Ground slabs sit behind the combat plane (Z = 0) so their front face is just in front of the actors. Centred
+-- on the plane, half of the walkable top would draw in front of everyone and they would look sunk into it.
+local LANE_Z = 2 - TILE.Z / 2
+local BACKDROP_Z = -12 -- mushroom props stand in the meadow behind this depth
+local SKIRT_WIDTH = 80 -- ground drawn past each side wall; wider than the camera ever sees
+local BEDROCK_DEPTH = 40
+local MEADOW_DEPTH = 220
+-- The meadow spans width + 2 * margin. Run slots are RUN_SLOT_SPACING (400) apart and rooms are 128 wide, so 136
+-- lets neighbouring runs' meadows meet without overlapping.
+local MEADOW_MARGIN = 136
+local EDGE_WALL_HEIGHT = 200
 
 local EXIT_OPEN_COLOR = Color3.fromRGB(80, 235, 255)
 local EXIT_LOCKED_COLOR = Color3.fromRGB(255, 70, 80)
@@ -101,6 +108,26 @@ local function forEachRun(columns: number, matches: (number) -> boolean, emit: (
 	end
 end
 
+-- Border walls and ceilings (a '#' on the grid edge whose inward neighbour is open) become invisible barriers,
+-- so the scenery from buildBackdrop shows past the room's edges instead of a bare stone column. Ground that
+-- reaches the edge (the bottom row, ledges touching the wall) stays visible.
+local function isBarrier(grid: { string }, column: number, row: number): boolean
+	local columns = #grid[row]
+	if cellAt(grid, column, row) ~= "#" or row == #grid then
+		return false
+	end
+	local dx = if column == 1 then 1 elseif column == columns then -1 else 0
+	local dy = if row == 1 then 1 else 0
+	if dx == 0 and dy == 0 then
+		return false
+	end
+	return cellAt(grid, column + dx, row + dy) ~= "#"
+end
+
+local function isVisibleGround(grid: { string }, column: number, row: number): boolean
+	return cellAt(grid, column, row) == "#" and not isBarrier(grid, column, row)
+end
+
 local function buildTerrain(room: Folder, grid: { string }, origin: Vector3, theme: WorldTheme)
 	local terrain = Instance.new("Folder")
 	terrain.Name = "Terrain"
@@ -113,19 +140,31 @@ local function buildTerrain(room: Folder, grid: { string }, origin: Vector3, the
 
 		-- Solid ground, merged per row, with a grass strip on every cell that has open air above it.
 		forEachRun(columns, function(column)
-			return cellAt(grid, column, row) == "#"
+			return isVisibleGround(grid, column, row)
 		end, function(first, length)
 			local centerX = origin.X + (first - 1 + length / 2) * TILE.X
 			newPart(terrain, "Ground", Vector3.new(length * TILE.X, TILE.Y, TILE.Z),
-				Vector3.new(centerX, rowBottom + TILE.Y / 2, 0), theme.Ground, Enum.Material.Slate)
+				Vector3.new(centerX, rowBottom + TILE.Y / 2, LANE_Z), theme.Ground, Enum.Material.Slate)
 		end)
 		forEachRun(columns, function(column)
-			return cellAt(grid, column, row) == "#" and cellAt(grid, column, row - 1) ~= "#"
+			return isBarrier(grid, column, row)
+		end, function(first, length)
+			local centerX = origin.X + (first - 1 + length / 2) * TILE.X
+			local wall = newPart(terrain, "Barrier", Vector3.new(length * TILE.X, TILE.Y, TILE.Z),
+				Vector3.new(centerX, rowBottom + TILE.Y / 2, 0), theme.Ground, Enum.Material.SmoothPlastic)
+			wall.Transparency = 1
+			wall.CastShadow = false
+		end)
+		-- The cap is sunk into the ground with its top flush with the walkable surface (a hair proud to avoid
+		-- z-fighting), so feet and station models stand on the grass instead of inside it.
+		forEachRun(columns, function(column)
+			return isVisibleGround(grid, column, row) and not isVisibleGround(grid, column, row - 1)
 		end, function(first, length)
 			local centerX = origin.X + (first - 1 + length / 2) * TILE.X
 			local cap = newPart(terrain, "GrassCap", Vector3.new(length * TILE.X, GRASS_THICKNESS, TILE.Z + 0.2),
-				Vector3.new(centerX, rowBottom + TILE.Y + GRASS_THICKNESS / 2 - 0.01, 0), theme.Cap, Enum.Material.Grass)
+				Vector3.new(centerX, rowBottom + TILE.Y - GRASS_THICKNESS / 2 + 0.02, LANE_Z), theme.Cap, Enum.Material.Grass)
 			cap.CanCollide = false
+			cap.CanQuery = false
 		end)
 
 		-- One-way platforms: a thin slab whose top is flush with the top of the row.
@@ -134,19 +173,46 @@ local function buildTerrain(room: Folder, grid: { string }, origin: Vector3, the
 		end, function(first, length)
 			local centerX = origin.X + (first - 1 + length / 2) * TILE.X
 			local platform = newPart(terrain, "OneWay", Vector3.new(length * TILE.X, PLATFORM_THICKNESS, TILE.Z),
-				Vector3.new(centerX, rowBottom + TILE.Y - PLATFORM_THICKNESS / 2, 0), theme.Platform, Enum.Material.WoodPlanks)
+				Vector3.new(centerX, rowBottom + TILE.Y - PLATFORM_THICKNESS / 2, LANE_Z), theme.Platform, Enum.Material.WoodPlanks)
 			CollectionService:AddTag(platform, Physics25D.ONE_WAY_TAG)
 		end)
 	end
 end
 
--- Parallax backdrop behind the combat plane plus a few mushroom props so the depth reads (Section 31.5).
-local function buildBackdrop(room: Folder, origin: Vector3, theme: WorldTheme, seed: number, width: number, height: number)
-	local backdrop = newPart(room, "Backdrop", Vector3.new(width + 60, height + 20, 1),
-		Vector3.new(origin.X + width / 2, origin.Y + height / 2, BACKDROP_Z), theme.Backdrop, Enum.Material.SmoothPlastic)
-	backdrop.CanCollide = false
-	backdrop.CanQuery = false
-	backdrop.CastShadow = false
+local function newScenery(parent: Instance, name: string, size: Vector3, center: Vector3, color: Color3, material: Enum.Material): Part
+	local part = newPart(parent, name, size, center, color, material)
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	return part
+end
+
+-- Scenery around the playable grid (Section 31.5): a grass meadow running back to the horizon under the open sky
+-- (SetupSky), ground continuing past both side walls, bedrock under the floor, and mushroom props in the meadow.
+-- Tall invisible walls on both sides stop jump pads from launching anyone over the edge.
+local function buildBackdrop(room: Folder, origin: Vector3, theme: WorldTheme, seed: number, width: number, _height: number)
+	local floorY = origin.Y + TILE.Y
+	local centerX = origin.X + width / 2
+
+	newScenery(room, "Bedrock", Vector3.new(width + 2 * SKIRT_WIDTH, BEDROCK_DEPTH, TILE.Z),
+		Vector3.new(centerX, origin.Y - BEDROCK_DEPTH / 2, LANE_Z), theme.Ground, Enum.Material.Slate)
+	newScenery(room, "Meadow", Vector3.new(width + 2 * MEADOW_MARGIN, TILE.Y + BEDROCK_DEPTH, MEADOW_DEPTH),
+		Vector3.new(centerX, floorY - (TILE.Y + BEDROCK_DEPTH) / 2, LANE_Z - TILE.Z / 2 - MEADOW_DEPTH / 2),
+		theme.Cap:Lerp(Color3.new(0, 0, 0), 0.12), Enum.Material.Grass).CastShadow = false
+
+	for side = -1, 1, 2 do
+		local skirtX = centerX + side * (width / 2 + SKIRT_WIDTH / 2)
+		newScenery(room, "SideGround", Vector3.new(SKIRT_WIDTH, TILE.Y, TILE.Z), Vector3.new(skirtX, origin.Y + TILE.Y / 2, LANE_Z),
+			theme.Ground, Enum.Material.Slate)
+		newScenery(room, "SideGrass", Vector3.new(SKIRT_WIDTH, GRASS_THICKNESS, TILE.Z + 0.2),
+			Vector3.new(skirtX, floorY - GRASS_THICKNESS / 2 + 0.02, LANE_Z), theme.Cap, Enum.Material.Grass)
+
+		local wall = newPart(room, "EdgeWall", Vector3.new(1, EDGE_WALL_HEIGHT, TILE.Z),
+			Vector3.new(centerX + side * (width / 2 + 0.5), floorY + EDGE_WALL_HEIGHT / 2, 0), theme.Ground, Enum.Material.SmoothPlastic)
+		wall.Transparency = 1
+		wall.CastShadow = false
+		wall.CanQuery = false
+	end
 
 	local rng = Random.new(seed)
 	local props = Instance.new("Folder")
@@ -156,7 +222,6 @@ local function buildBackdrop(room: Folder, origin: Vector3, theme: WorldTheme, s
 		local x = origin.X + rng:NextNumber(4, width - 4)
 		local z = BACKDROP_Z - rng:NextNumber(2, 14)
 		local stemHeight = rng:NextNumber(8, 22)
-		local floorY = origin.Y + TILE.Y
 		local stem = newPart(props, "Stem", Vector3.new(stemHeight, 3, 3), Vector3.new(x, floorY + stemHeight / 2, z),
 			Color3.fromRGB(235, 225, 200), Enum.Material.SmoothPlastic)
 		stem.Shape = Enum.PartType.Cylinder
@@ -175,7 +240,7 @@ local function buildBackdrop(room: Folder, origin: Vector3, theme: WorldTheme, s
 end
 
 local function buildJumpPad(room: Folder, bottom: Vector3)
-	local pad = newPart(room, "JumpPad", Vector3.new(6, 1, TILE.Z), bottom + Vector3.new(0, 0.5, 0), PAD_COLOR, Enum.Material.Neon)
+	local pad = newPart(room, "JumpPad", Vector3.new(6, 1, TILE.Z), Vector3.new(bottom.X, bottom.Y + 0.5, LANE_Z), PAD_COLOR, Enum.Material.Neon)
 	pad.CanCollide = false
 
 	local light = Instance.new("PointLight")
@@ -184,21 +249,8 @@ local function buildJumpPad(room: Folder, bottom: Vector3)
 	light.Brightness = 1.5
 	light.Parent = pad
 
-	local lastLaunch: { [Player]: number } = {}
-	pad.Touched:Connect(function(hit: BasePart)
-		local character = hit.Parent :: Model?
-		local player = if character then Players:GetPlayerFromCharacter(character) else nil
-		local root = if character then character:FindFirstChild("HumanoidRootPart") else nil
-		if not player or not root or not root:IsA("BasePart") then
-			return
-		end
-		local now = os.clock()
-		if now - (lastLaunch[player] or 0) < JUMP_PAD_COOLDOWN then
-			return
-		end
-		lastLaunch[player] = now
-		root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, JUMP_PAD_VELOCITY, 0)
-	end)
+	-- Movement25DController launches the local character when it stands on a tagged pad.
+	CollectionService:AddTag(pad, Physics25D.JUMP_PAD_TAG)
 end
 
 local function buildExit(room: Folder, bottom: Vector3): (BasePart, BasePart)
@@ -362,6 +414,37 @@ function RoomBuilderService.BuildRoom(templateId: string, origin: Vector3, paren
 	}
 	RoomBuilderService.SetExitOpen(built, false)
 	return built
+end
+
+-- Clear blue daytime sky shared by the town and every run. The skybox and Clouds render at infinity, so they
+-- follow the camera everywhere; GlobalWind keeps the clouds drifting. Safe to call more than once.
+function RoomBuilderService.SetupSky()
+	local sky = Lighting:FindFirstChildOfClass("Sky") or Instance.new("Sky")
+	sky.SunAngularSize = 12
+	sky.MoonAngularSize = 0
+	sky.StarCount = 0
+	sky.Parent = Lighting
+
+	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
+	atmosphere.Density = 0.28
+	atmosphere.Offset = 0.15
+	atmosphere.Color = Color3.fromRGB(190, 222, 255)
+	atmosphere.Decay = Color3.fromRGB(110, 160, 230)
+	atmosphere.Glare = 0.2
+	atmosphere.Haze = 0.8
+	atmosphere.Parent = Lighting
+
+	local clouds = Workspace.Terrain:FindFirstChildOfClass("Clouds") or Instance.new("Clouds")
+	clouds.Cover = 0.45
+	clouds.Density = 0.6
+	clouds.Color = Color3.fromRGB(255, 255, 255)
+	clouds.Parent = Workspace.Terrain
+	Workspace.GlobalWind = Vector3.new(8, 0, 3)
+
+	Lighting.ClockTime = 13.5
+	Lighting.GeographicLatitude = 20
+	Lighting.OutdoorAmbient = Color3.fromRGB(150, 160, 180)
+	Lighting.Ambient = Color3.fromRGB(70, 75, 90)
 end
 
 function RoomBuilderService.DestroyRoom(room: BuiltRoom)

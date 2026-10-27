@@ -231,6 +231,17 @@ local function newStationPart(model: Model, name: string, size: Vector3, cframe:
 	return part
 end
 
+-- A Model with a PrimaryPart ignores WorldPivot and pivots on its PrimaryPart (plus PivotOffset), so the
+-- bottom-centre pivot has to be set as the PrimaryPart's PivotOffset. Without it, PivotTo(floor) buries half the model.
+local function setBottomPivot(model: Model, pivot: CFrame)
+	local primary = model.PrimaryPart
+	if primary then
+		primary.PivotOffset = primary.CFrame:ToObjectSpace(pivot)
+	else
+		model.WorldPivot = pivot
+	end
+end
+
 -- Station prefab whose pivot is its bottom-centre, so callers can PivotTo the floor point directly. Prompts hang on
 -- the PrimaryPart. Everything is anchored and non-colliding so stations never block the 2.5D lane.
 function AssetRegistry.CreateStationModel(stationKey: string): Model
@@ -241,7 +252,7 @@ function AssetRegistry.CreateStationModel(stationKey: string): Model
 	if customPrefab then
 		local model = ModelNormalizer.SanitizeAndNormalize(customPrefab:Clone(), look.Size)
 		local cf, size = model:GetBoundingBox()
-		model.WorldPivot = cf * CFrame.new(0, -size.Y / 2, 0)
+		setBottomPivot(model, cf * CFrame.new(0, -size.Y / 2, 0))
 		if model.PrimaryPart then
 			addLabel(model.PrimaryPart, title, look.Color)
 		end
@@ -274,7 +285,7 @@ function AssetRegistry.CreateStationModel(stationKey: string): Model
 
 	addLabel(base, title, look.Color)
 	model.PrimaryPart = base
-	model.WorldPivot = CFrame.new()
+	setBottomPivot(model, CFrame.new()) -- parts were built around the origin, standing on Y = 0
 	return model
 end
 

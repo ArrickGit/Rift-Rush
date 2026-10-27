@@ -145,11 +145,21 @@ local function keyFor(player: Player): string
 	return "Player_" .. player.UserId
 end
 
+-- Studio without "Enable Studio Access to API Services" fails every call; retrying only delays the profile.
+local function isStudioAccessDenied(err: string): boolean
+	return RunService:IsStudio() and string.find(err, "Studio access to APIs is not allowed", 1, true) ~= nil
+end
+
 local function withRetries<T>(label: string, fn: () -> T): (boolean, T?)
 	for attempt = 1, MAX_RETRIES do
 		local ok, result = pcall(fn)
 		if ok then
 			return true, result
+		end
+		if isStudioAccessDenied(tostring(result)) then
+			warn("[PlayerDataService] Studio API access is off (Game Settings > Security); using unsaved profiles.")
+			store = nil
+			return false, nil
 		end
 		warn(("[PlayerDataService] %s failed (attempt %d/%d): %s"):format(label, attempt, MAX_RETRIES, tostring(result)))
 		task.wait(2 ^ (attempt - 1))

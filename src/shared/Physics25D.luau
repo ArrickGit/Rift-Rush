@@ -13,13 +13,17 @@ local Physics25D = {}
 Physics25D.PLANE_Z = 0
 Physics25D.ACTOR_GROUP = "ActorsNoCollide"
 Physics25D.ONE_WAY_TAG = "OneWayPlatform" -- RoomBuilderService tags '=' tiles with this
+-- RoomBuilderService tags '^' pads with this. The client launches its own character (it owns that physics),
+-- so a server-side velocity write would just be overwritten.
+Physics25D.JUMP_PAD_TAG = "JumpPad"
+Physics25D.JUMP_PAD_VELOCITY = 110 -- a normal jump is ~63 (10 studs); 110 climbs ~30 studs
 Physics25D.SKYWALKER_NODE_ID = "AS_T2_01"
 
 local PLANE_ANCHOR_NAME = "RiftPlaneAnchor"
 local PLANE_LOCK_NAME = "PlaneLock"
 
 local BASE_WALK_SPEED = 20
-local BASE_JUMP_HEIGHT = 8
+local BASE_JUMP_HEIGHT = 10 -- double jump peaks ~20 studs, clearing the 12-stud (2-row) platform gaps with room to spare
 local BASE_DASH_COOLDOWN = 1.0
 
 export type Mobility = {
