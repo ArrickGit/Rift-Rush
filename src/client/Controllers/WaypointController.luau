@@ -27,6 +27,11 @@ local MARKER_SIZE = 46
 local MARKER_SPACING = MARKER_SIZE + 22 -- room for the distance label under each marker
 local EDGE_MARGIN = 40 -- keeps markers (and their arrows) clear of the screen edge
 local TOP_MARGIN = 70 -- below the Roblox top bar and the HUD's status panel
+-- UIController's town side menu (left) and wallet chips (right), in its 1280x720 design pixels; markers stay inside.
+local LEFT_RESERVED = 130
+local RIGHT_RESERVED = 175
+local REF_WIDTH, REF_HEIGHT = 1280, 720
+local MIN_SCALE, MAX_SCALE = 0.55, 1.25 -- the same clamp UIController uses
 local TARGET_LIFT = Vector3.new(0, 4, 0) -- aim at the station's middle rather than its floor pivot
 
 local player = Players.LocalPlayer
@@ -107,7 +112,8 @@ local function update()
 	end
 
 	local viewport = camera.ViewportSize
-	local minX, maxX = EDGE_MARGIN, viewport.X - EDGE_MARGIN
+	local uiScale = math.clamp(math.min(viewport.X / REF_WIDTH, viewport.Y / REF_HEIGHT), MIN_SCALE, MAX_SCALE)
+	local minX, maxX = EDGE_MARGIN + LEFT_RESERVED * uiScale, viewport.X - EDGE_MARGIN - RIGHT_RESERVED * uiScale
 	local minY, maxY = TOP_MARGIN, viewport.Y - EDGE_MARGIN
 	local halfX, halfY = (maxX - minX) / 2, (maxY - minY) / 2
 	local boxCenter = Vector2.new((minX + maxX) / 2, (minY + maxY) / 2)

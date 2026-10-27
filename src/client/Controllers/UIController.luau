@@ -30,8 +30,41 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local RoomAsciiTemplates = require(Shared:WaitForChild("RoomAsciiTemplates"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 
+-- UIPack Plus ("ShardUI", by sebattfg) lives in the place file under ReplicatedStorage, never in Rojo/git: its
+-- license forbids redistributing it. With it, buttons, windows, bars, chips and cards are its image "gems"; without it
+-- (e.g. a fresh `rojo build`) every helper below falls back to the flat style.
+local Shard: any = nil
+do
+	local pack = ReplicatedStorage:WaitForChild("ShardUI", 5)
+	if pack then
+		local ok, result = pcall(function(): any
+			local root = pack :: any
+			local load = require :: any -- the pack is not in the Rojo sourcemap, so its modules are untyped
+			return {
+				Button = load(root.Button.Button),
+				IconButton = load(root.IconButton.IconButton),
+				Panel = load(root.Panel.Panel),
+				Inset = load(root.Inset.Inset),
+				Card = load(root.Card.Card),
+				Chip = load(root.Chip.Chip),
+				Bar = load(root.Bar.Bar),
+				Badge = load(root.Badge.Badge),
+				Icons = load(root.Shared.Icons),
+				Palette = load(root.Shared.Palette),
+			}
+		end)
+		if ok then
+			Shard = result
+		else
+			warn("[UIController] ShardUI failed to load, using the flat UI style: " .. tostring(result))
+		end
+	else
+		warn("[UIController] ReplicatedStorage.ShardUI not found, using the flat UI style")
+	end
+end
+
 type Payload = { [string]: any }
-type Bar = { Fill: Frame, Label: TextLabel }
+type Bar = { Fill: Frame?, Label: TextLabel, Shard: any? }
 
 local UIController = {}
 
@@ -91,45 +124,45 @@ local LEAVE_MESSAGES: { [string]: string } = {
 }
 
 -- Left-edge buttons shown in town (buildTownMenu); each opens that station's panel from anywhere.
-local TOWN_MENU: { { Station: string, Label: string } } = {
-	{ Station = "RiftShrine", Label = "Shop" },
-	{ Station = "SparkSanctum", Label = "Ascend" },
-	{ Station = "AscensionPedestal", Label = "Rebirth" },
+local TOWN_MENU: { { Station: string, Label: string, PackIcon: string } } = {
+	{ Station = "RiftShrine", Label = "Shop", PackIcon = "Cart" },
+	{ Station = "SparkSanctum", Label = "Ascend", PackIcon = "Upgrade" },
+	{ Station = "AscensionPedestal", Label = "Rebirth", PackIcon = "Crown" },
 }
 
 -- Rift Shrine store cards (renderShop). Price and ownership come from MonetizationConfig; this only styles them.
 -- Kind "Product" / "Pass" are Robux purchases; a future in-game-currency item would add its own Kind.
 type ShopItem = { Key: string, Kind: "Product" | "Pass", Title: string, Icon: string, Color: Color3, Tag: string?,
-	Tabs: { string } }
+	Tabs: { string }, PackIcon: string? } -- PackIcon: a ShardUI Icons key, shown instead of the emoji when it exists
 
 local SHOP_TABS = { "Featured", "Boosts", "Passes", "Rebirth" }
 local SHOP_ITEMS: { ShopItem } = {
 	{ Key = "RiftSurge", Kind = "Product", Title = "Rift Surge", Icon = "⚡", Color = Color3.fromRGB(40, 185, 230),
-		Tag = "Server", Tabs = { "Featured", "Boosts" } },
+		Tag = "Server", Tabs = { "Featured", "Boosts" }, PackIcon = "Bolt" },
 	{ Key = "TrueAscendant", Kind = "Pass", Title = "True Ascendant", Icon = "👑", Color = Color3.fromRGB(255, 170, 30),
-		Tag = "Best", Tabs = { "Featured", "Rebirth", "Passes" } },
+		Tag = "Best", Tabs = { "Featured", "Rebirth", "Passes" }, PackIcon = "Crown" },
 	{ Key = "DoubleXP", Kind = "Pass", Title = "2x Hunter XP", Icon = "⭐", Color = Color3.fromRGB(80, 200, 80),
-		Tag = "x2", Tabs = { "Featured", "Passes" } },
+		Tag = "x2", Tabs = { "Featured", "Passes" }, PackIcon = "Star" },
 	{ Key = "DoubleDust", Kind = "Pass", Title = "2x Rift Dust", Icon = "🔮", Color = Color3.fromRGB(160, 80, 250),
 		Tag = "x2", Tabs = { "Featured", "Passes" } },
 	{ Key = "SuperchargedRunToken", Kind = "Product", Title = "Supercharge", Icon = "🚀", Color = Color3.fromRGB(255, 120, 50),
 		Tag = "x2 Dust", Tabs = { "Featured", "Boosts" } },
 	{ Key = "VIPArchitect", Kind = "Pass", Title = "4th Card", Icon = "🃏", Color = Color3.fromRGB(240, 70, 160),
-		Tag = "VIP", Tabs = { "Featured", "Passes" } },
+		Tag = "VIP", Tabs = { "Featured", "Passes" }, PackIcon = "Gift" },
 	{ Key = "RerollPack5", Kind = "Product", Title = "Rerolls", Icon = "🎲", Color = Color3.fromRGB(70, 130, 255),
-		Tag = "x5", Tabs = { "Featured", "Boosts" } },
+		Tag = "x5", Tabs = { "Featured", "Boosts" }, PackIcon = "Dice" },
 	{ Key = "KeepEverythingSeal", Kind = "Product", Title = "Keep Seal", Icon = "📜", Color = Color3.fromRGB(230, 60, 90),
 		Tag = "1 use", Tabs = { "Featured", "Rebirth" } },
 	{ Key = "StarForceSafeguardPack", Kind = "Product", Title = "Safeguards", Icon = "🛡️", Color = Color3.fromRGB(60, 170, 200),
 		Tag = "x3", Tabs = { "Boosts" } },
 	{ Key = "BanishPass", Kind = "Pass", Title = "Banish Pass", Icon = "🚫", Color = Color3.fromRGB(225, 70, 70),
-		Tabs = { "Passes" } },
+		Tabs = { "Passes" }, PackIcon = "Warning" },
 	{ Key = "VaultInsurance", Kind = "Pass", Title = "Insurance", Icon = "🏦", Color = Color3.fromRGB(40, 175, 150),
 		Tabs = { "Passes" } },
 	{ Key = "RelicVaultKey", Kind = "Pass", Title = "Relic Key", Icon = "🗝️", Color = Color3.fromRGB(230, 150, 40),
 		Tabs = { "Passes" } },
 	{ Key = "ExtraLinkSlots", Kind = "Pass", Title = "+2 Links", Icon = "🔗", Color = Color3.fromRGB(90, 110, 240),
-		Tag = "+2", Tabs = { "Passes" } },
+		Tag = "+2", Tabs = { "Passes" }, PackIcon = "Friends" },
 }
 
 local SHOP_BLURBS: { [string]: string } = {
@@ -149,7 +182,7 @@ local SHOP_BLURBS: { [string]: string } = {
 }
 
 local DISPLAY_FONT = Enum.Font.FredokaOne -- titles, buttons, numbers
-local BODY_FONT = Enum.Font.BuilderSansBold -- descriptions and small print
+local BODY_FONT = Enum.Font.FredokaOne -- the pack uses Fredoka One for every line of text
 
 local LABEL_DEFAULTS: Payload = {
 	BackgroundTransparency = 1,
@@ -209,8 +242,8 @@ local upgradeFrame: Frame
 local upgradeWindow: Window
 local upgradeTitle: TextLabel
 local cardRow: Frame
-local rerollButton: TextButton
-local banishButton: TextButton
+local rerollButton: GuiButton
+local banishButton: GuiButton
 local offerId = 0
 local offerCards: { Payload } = {}
 local offerRerolls = 0
@@ -230,7 +263,7 @@ local defeatGui: ScreenGui
 local defeatTimer: TextLabel
 local defeatSafe: TextLabel
 local defeatRisk: TextLabel
-local defeatButtons: { [string]: TextButton } = {}
+local defeatButtons: { [string]: GuiButton } = {}
 local defeatDeadline: number? = nil
 local defeatOpen = false
 
@@ -238,8 +271,9 @@ local defeatOpen = false
 local stationFrame: Frame
 local stationWindow: Window
 local shopFrame: Frame
+local windowScrims: { GuiObject } = {}
 local shopGrid: ScrollingFrame
-local shopTabs: { [string]: TextButton } = {}
+local shopTabs: { [string]: GuiButton } = {}
 local shopInfo: TextLabel
 local shopWallet: { [string]: TextLabel } = {}
 local shopTab = "Featured"
@@ -368,7 +402,7 @@ local function addPressFeedback(button: GuiButton)
 	end)
 end
 
-local function setEnabled(button: TextButton, enabled: boolean, color: Color3)
+local function setFlatEnabled(button: TextButton, enabled: boolean, color: Color3)
 	button:SetAttribute("Enabled", enabled)
 	button.AutoButtonColor = false
 	button.BackgroundColor3 = if enabled then color else COLORS.Disabled
@@ -380,7 +414,7 @@ local function setEnabled(button: TextButton, enabled: boolean, color: Color3)
 end
 
 -- Chunky cartoon button: saturated top-lit fill, thick darker edge, a glossy highlight, outlined display text.
-local function newButton(parent: Instance, label: string, color: Color3, onClick: () -> (), props: Payload?): TextButton
+local function newFlatButton(parent: Instance, label: string, color: Color3, onClick: () -> (), props: Payload?): TextButton
 	local button: TextButton = create("TextButton", merged({
 		BackgroundColor3 = color,
 		AutoButtonColor = false,
@@ -418,9 +452,95 @@ local function newButton(parent: Instance, label: string, color: Color3, onClick
 	return button
 end
 
+-- ShardUI button handles, keyed by the gem's root. setEnabled / setButtonText repaint the same instance, so references
+-- held by the screens (reroll, banish, defeat options...) stay valid.
+local shardButtons: { [GuiObject]: any } = setmetatable({}, { __mode = "k" }) :: any
+
+-- The ShardUI family whose middle band is closest to `color` (the screens still speak in Color3).
+local function familyFor(color: Color3): string
+	local best, bestDistance = "slate", math.huge
+	for key, family in Shard.Palette.Families do
+		local m: Color3 = family.m
+		local distance = (m.R - color.R) ^ 2 + (m.G - color.G) ^ 2 + (m.B - color.B) ^ 2
+		if distance < bestDistance then
+			best, bestDistance = key, distance
+		end
+	end
+	return best
+end
+
+local function newButton(parent: Instance, label: string, color: Color3, onClick: () -> (), props: Payload?): GuiButton
+	if not Shard then
+		return newFlatButton(parent, label, color, onClick, props)
+	end
+	local p: Payload = props or {}
+	local size: UDim2 = p.Size or UDim2.fromOffset(160, 42)
+	-- Gems have fixed heights per variant (sm 55, md 72, big 99): pick the one closest to what the screen asked for.
+	local variant = if size.Y.Offset >= 86 then "big" elseif size.Y.Offset >= 62 then "md" else "sm"
+	local gem = Shard.Button.new({ text = label, variant = variant, family = familyFor(color),
+		width = if size.X.Scale == 0 then size.X.Offset else 200 })
+	local root = gem.Root :: GuiButton
+	root.Size = UDim2.new(size.X.Scale, size.X.Offset, 0, root.Size.Y.Offset)
+	for _, key in { "AnchorPoint", "Position", "LayoutOrder", "Visible", "ZIndex" } do
+		if p[key] ~= nil then
+			(root :: any)[key] = p[key]
+		end
+	end
+	local text: TextLabel = gem.Label
+	text.RichText = true
+	text.TextWrapped = true
+	if p.TextSize then
+		text.TextSize = p.TextSize
+	end
+	if p.TextXAlignment then
+		text.TextXAlignment = p.TextXAlignment
+	end
+	shardButtons[root] = gem
+	root:SetAttribute("Enabled", true)
+	root.MouseButton1Click:Connect(function()
+		if root:GetAttribute("Enabled") ~= false then
+			onClick()
+		end
+	end)
+	root.Parent = parent
+	return root
+end
+
+-- Disabled gems are repainted slate with faded text (the pack's look), and recoloured when re-enabled.
+local function setEnabled(button: GuiButton, enabled: boolean, color: Color3)
+	local gem = shardButtons[button]
+	if not gem then
+		setFlatEnabled(button :: any, enabled, color)
+		return
+	end
+	button:SetAttribute("Enabled", enabled)
+	button.Active = enabled
+	if enabled then
+		gem.Family = Shard.Palette.Families[familyFor(color)]
+		gem:SetSelected(false)
+	else
+		gem:SetSelected(true, "slate")
+	end
+	local text: TextLabel = gem.Label
+	text.TextTransparency = if enabled then 0 else 0.4
+	local stroke = text:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Transparency = if enabled then 0 else 0.4
+	end
+end
+
+local function setButtonText(button: GuiButton, text: string)
+	local gem = shardButtons[button]
+	if gem then
+		gem.Label.Text = text
+	else
+		(button :: TextButton).Text = text
+	end
+end
+
 -- Window (the shop's layout, shared by every screen): coloured body, darker header strip with a big outlined title
 -- and an optional red X, and a dark inset for the content.
-type Window = { Frame: Frame, Header: Frame, Title: TextLabel, Body: Frame }
+type Window = { Frame: Frame, Header: GuiObject, Title: TextLabel, Body: Frame, Shard: any? }
 
 local function headerColor(color: Color3): Color3
 	return color:Lerp(Color3.new(0, 0, 0), 0.24)
@@ -430,7 +550,41 @@ local function insetColor(color: Color3): Color3
 	return color:Lerp(Color3.fromHex("0d1524"), 0.62)
 end
 
+-- The pack panel's frame is a 3-band gradient (light / mid / dark) over the family's panel tints.
+local function panelBands(color: Color3): ColorSequence
+	local key = familyFor(color)
+	local family = Shard.Palette.Panels[key] or Shard.Palette.Families[key]
+	return ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, family.l),
+		ColorSequenceKeypoint.new(0.23, family.l),
+		ColorSequenceKeypoint.new(0.24, family.m),
+		ColorSequenceKeypoint.new(0.57, family.m),
+		ColorSequenceKeypoint.new(0.58, family.d),
+		ColorSequenceKeypoint.new(1.00, family.d),
+	})
+end
+
 local function newWindow(parent: Instance, color: Color3, props: Payload, onClose: (() -> ())?): Window
+	if Shard then
+		local size: UDim2 = props.Size or UDim2.fromOffset(600, 450)
+		local panel = Shard.Panel.new({ title = "", family = familyFor(color), width = size.X.Offset,
+			height = size.Y.Offset, headHeight = 76 })
+		local root = panel.Root :: Frame
+		for _, key in { "AnchorPoint", "Position", "Visible" } do
+			if props[key] ~= nil then
+				(root :: any)[key] = props[key]
+			end
+		end
+		local title = panel.Title :: TextLabel
+		title.RichText = true
+		title.TextSize = 30
+		if onClose then
+			Shard.IconButton.new({ icon = Shard.Icons.Close, variant = "sm", family = "red", parent = panel.Tools,
+				onClick = onClose })
+		end
+		root.Parent = parent
+		return { Frame = root, Header = panel.Head, Title = title, Body = panel.Body, Shard = panel }
+	end
 	local frame = newPanel(parent, merged({ BackgroundColor3 = color }, props))
 	local header: Frame = create("Frame", { Name = "Header", Size = UDim2.new(1, 0, 0, 64),
 		BackgroundColor3 = headerColor(color) }, frame)
@@ -449,11 +603,36 @@ local function newWindow(parent: Instance, color: Color3, props: Payload, onClos
 end
 
 local function setWindowColor(window: Window, color: Color3)
+	if window.Shard then
+		local gradient = window.Shard.Frame:FindFirstChildOfClass("UIGradient")
+		if gradient then
+			gradient.Color = panelBands(color)
+		end
+		return
+	end
 	window.Frame.BackgroundColor3 = color
 	window.Header.BackgroundColor3 = headerColor(color)
 end
 
 local function newBar(parent: Instance, color: Color3, order: number): Bar
+	if Shard then
+		-- A pack gauge with the value written over it; it follows its container's width (it is sized in pixels).
+		local holder: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1,
+			LayoutOrder = order }, parent)
+		local gauge = Shard.Bar.new({ family = familyFor(color), value = 0, width = 200, parent = holder })
+		local function fit()
+			local width = holder.AbsoluteSize.X / math.max(scaleObjects[1] and scaleObjects[1].Scale or 1, 0.01)
+			if width > 40 then
+				gauge:SetWidth(math.floor(width))
+			end
+		end
+		holder:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
+		task.defer(fit)
+		local text = newLabel(holder, { Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Center,
+			Font = DISPLAY_FONT, TextSize = 16, ZIndex = 10 })
+		create("UIStroke", { Color = COLORS.Stroke, Thickness = 2.5, LineJoinMode = Enum.LineJoinMode.Round }, text)
+		return { Fill = nil, Label = text, Shard = gauge }
+	end
 	local back: Frame = create("Frame", {
 		Size = UDim2.new(1, 0, 0, 20),
 		BackgroundColor3 = Color3.fromRGB(14, 10, 30),
@@ -476,7 +655,12 @@ local function newBar(parent: Instance, color: Color3, order: number): Bar
 end
 
 local function setBar(bar: Bar, ratio: number, label: string)
-	bar.Fill.Size = UDim2.fromScale(math.clamp(ratio, 0, 1), 1)
+	local fill = bar.Fill
+	if bar.Shard then
+		bar.Shard:Set(math.clamp(ratio, 0, 1))
+	elseif fill then
+		fill.Size = UDim2.fromScale(math.clamp(ratio, 0, 1), 1)
+	end
 	bar.Label.Text = label
 end
 
@@ -488,7 +672,11 @@ local function clearGuiChildren(parent: Instance)
 	end
 end
 
-local function newLayer(name: string, displayOrder: number, ignoreInset: boolean): ScreenGui
+-- A ScreenGui ignores a UIScale, so each layer gets a full-screen root frame that carries it. The layout is designed
+-- at REF_WIDTH x REF_HEIGHT; updateScale shrinks the root's Size by the same factor its UIScale grows it.
+local scaleRoots: { Frame } = {}
+
+local function newLayer(name: string, displayOrder: number, ignoreInset: boolean): Frame
 	local gui: ScreenGui = create("ScreenGui", {
 		Name = name,
 		ResetOnSpawn = false,
@@ -496,8 +684,10 @@ local function newLayer(name: string, displayOrder: number, ignoreInset: boolean
 		IgnoreGuiInset = ignoreInset,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	}, player:WaitForChild("PlayerGui"))
-	table.insert(scaleObjects, create("UIScale", {}, gui))
-	return gui
+	local root: Frame = create("Frame", { Name = "ScaleRoot", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, gui)
+	table.insert(scaleObjects, create("UIScale", {}, root))
+	table.insert(scaleRoots, root)
+	return root
 end
 
 local function updateScale()
@@ -509,6 +699,9 @@ local function updateScale()
 	local scale = math.clamp(math.min(viewport.X / REF_WIDTH, viewport.Y / REF_HEIGHT), MIN_SCALE, MAX_SCALE)
 	for _, uiScale in scaleObjects do
 		uiScale.Scale = scale
+	end
+	for _, root in scaleRoots do
+		root.Size = UDim2.fromScale(1 / scale, 1 / scale)
 	end
 end
 
@@ -653,12 +846,20 @@ local function refreshProfileHud()
 	end
 
 	local vault = tonumber(data.ProtectedDustVault) or 0
-	currencyLabels.RiftDust.Text = formatNumber(data.RiftDust or 0)
-		.. (if vault > 0 then (" <font color='#%s'>(+%s vault)</font>"):format(COLORS.Muted:ToHex(), formatNumber(vault)) else "")
-	currencyLabels.BossCores.Text = formatNumber(data.BossCores or 0)
-	currencyLabels.RelicShards.Text = formatNumber(data.RelicShards or 0)
-	currencyLabels.RebirthSpark.Text = formatNumber(data.RebirthSparksAvailable or 0)
-	currencyLabels.AnchorToken.Text = formatNumber(data.AnchorTokens or 0)
+	local function setCurrency(key: string, value: any)
+		local label = currencyLabels[key]
+		local amount = formatNumber(tonumber(value) or 0)
+		label.Text = if Shard then currencyIcon(key) .. " " .. amount else amount
+	end
+	setCurrency("RiftDust", data.RiftDust)
+	if vault > 0 and not Shard then -- the pack chips are fixed-width; the vault total shows at the Pedestal
+		currencyLabels.RiftDust.Text ..= (" <font color='#%s'>(+%s vault)</font>"):format(COLORS.Muted:ToHex(),
+			formatNumber(vault))
+	end
+	setCurrency("BossCores", data.BossCores)
+	setCurrency("RelicShards", data.RelicShards)
+	setCurrency("RebirthSpark", data.RebirthSparksAvailable)
+	setCurrency("AnchorToken", data.AnchorTokens)
 end
 
 local function refreshRunBanner()
@@ -711,11 +912,21 @@ end
 local function buildHud()
 	local gui = newLayer("RiftHUD", 10, false)
 
-	local status = newPanel(gui, { Position = UDim2.fromOffset(12, 12), Size = UDim2.fromOffset(300, 0),
-		AutomaticSize = Enum.AutomaticSize.Y })
-	pad(status, 8)
-	list(status, Enum.FillDirection.Vertical, 5)
-	levelLabel = newLabel(status, { Size = UDim2.new(1, 0, 0, 18), TextSize = 16, LayoutOrder = 1 })
+	-- With the pack the vitals sit straight on the screen (its HUD has no frame around them); otherwise in a panel.
+	local status: Frame
+	if Shard then
+		status = create("Frame", { Position = UDim2.fromOffset(16, 14), Size = UDim2.fromOffset(300, 0),
+			AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
+	else
+		status = newPanel(gui, { Position = UDim2.fromOffset(12, 12), Size = UDim2.fromOffset(300, 0),
+			AutomaticSize = Enum.AutomaticSize.Y })
+		pad(status, 8)
+	end
+	list(status, Enum.FillDirection.Vertical, 6)
+	levelLabel = newLabel(status, { Size = UDim2.new(1, 0, 0, 24), TextSize = if Shard then 22 else 16, LayoutOrder = 1 })
+	if Shard then
+		create("UIStroke", { Color = COLORS.Stroke, Thickness = 3, LineJoinMode = Enum.LineJoinMode.Round }, levelLabel)
+	end
 	hpBar = newBar(status, COLORS.HP, 2)
 	xpBar = newBar(status, COLORS.XP, 3)
 
@@ -724,6 +935,14 @@ local function buildHud()
 	local walletLayout = list(wallet, Enum.FillDirection.Vertical, 4)
 	walletLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
 	for order, key in { "RiftDust", "BossCores", "RelicShards", "RebirthSpark", "AnchorToken" } do
+		if Shard then
+			-- A static pack chip per currency; the emoji icon is part of its text (see setCurrency).
+			local chip = Shard.Chip.new({ text = currencyIcon(key) .. " 0", variant = "sm", family = "slate", static = true,
+				width = 150, parent = wallet })
+			chip.Root.LayoutOrder = order
+			currencyLabels[key] = chip.Label
+			continue
+		end
 		local info = AssetRegistry.Currencies[key]
 		local pill = newPanel(wallet, { Size = UDim2.fromOffset(0, 26), AutomaticSize = Enum.AutomaticSize.X,
 			LayoutOrder = order })
@@ -783,15 +1002,62 @@ local function chooseCard(index: number)
 	end
 end
 
+-- Pack upgrade card: the pack's Card in the rarity's family, a rarity badge on its corner and the description below.
+local RARITY_FAMILIES: { [string]: string } = {
+	Common = "slate",
+	Rare = "cyan",
+	Epic = "violet",
+	Legendary = "amber",
+	Corrupted = "magenta",
+}
+local SHARD_CARD_GAP = 18
+
+local function buildShardUpgradeCard(index: number, card: any)
+	local size: Vector2 = Shard.Card.size("sm")
+	local slot: Frame = create("Frame", { Size = UDim2.fromOffset(size.X, size.Y + 84), BackgroundTransparency = 1,
+		LayoutOrder = index }, cardRow)
+	local pick = function()
+		chooseCard(index)
+	end
+	local hint = if UserInputService.KeyboardEnabled then (" [%d]"):format(index) else ""
+	local gem = Shard.Card.new({ name = tostring(card.Name), variant = "sm",
+		family = RARITY_FAMILIES[tostring(card.Rarity)] or "slate",
+		price = (if banishMode then "Banish" else "Pick") .. hint, priceFamily = if banishMode then "red" else "green",
+		activated = pick })
+	gem.Button.Root.MouseButton1Click:Connect(pick)
+	newLabel(gem.Thumb, { Size = UDim2.fromScale(1, 1), Text = tostring(card.Icon), TextSize = 62, ZIndex = 8,
+		TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
+	gem.Root.Parent = slot
+
+	local stacks = tonumber(card.Stacks) or 0
+	local maxStacks = tonumber(card.MaxStacks) or 1
+	Shard.Badge.attachTo(Shard.Badge.new({ text = tostring(card.Rarity) .. (if maxStacks > 1
+		then (" %d/%d"):format(stacks, maxStacks) else ""), variant = "sm", family = "slate", static = true }), gem.Root)
+
+	local desc = newLabel(slot, { Position = UDim2.fromOffset(0, size.Y + 10), Size = UDim2.new(1, 0, 0, 74),
+		Text = tostring(card.Desc), TextSize = 16, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Top })
+	create("UIStroke", { Color = COLORS.Stroke, Thickness = 2, LineJoinMode = Enum.LineJoinMode.Round }, desc)
+end
+
 local function renderOffer()
 	clearGuiChildren(cardRow)
 	local count = #offerCards
 	upgradeTitle.Text = if banishMode
 		then ("<font color='#%s'>🚫 Choose a card to BANISH for this run</font>"):format(COLORS.Bad:ToHex())
 		else "⬆️ <b>Choose an Upgrade</b>"
-	upgradeFrame.Size = UDim2.fromOffset(math.max(420, count * CARD_WIDTH + (count - 1) * CARD_GAP + 44), 450)
+	if Shard then
+		local cardWidth = Shard.Card.size("sm").X
+		upgradeFrame.Size = UDim2.fromOffset(math.max(520, count * cardWidth + (count - 1) * SHARD_CARD_GAP + 64), 610)
+	else
+		upgradeFrame.Size = UDim2.fromOffset(math.max(420, count * CARD_WIDTH + (count - 1) * CARD_GAP + 44), 450)
+	end
 
 	for index, card in offerCards do
+		if Shard then
+			buildShardUpgradeCard(index, card)
+			continue
+		end
 		local style = AssetRegistry.GetRarityStyle(card.Rarity)
 		-- Shop-style card in the rarity colour: striped icon box, outlined text, red edge while banishing.
 		local cardColor = style.Color:Lerp(Color3.new(0, 0, 0), 0.12)
@@ -837,10 +1103,10 @@ local function renderOffer()
 		end)
 	end
 
-	rerollButton.Text = ("🎲 Reroll (%d)"):format(offerRerolls)
+	setButtonText(rerollButton, ("🎲 Reroll (%d)"):format(offerRerolls))
 	setEnabled(rerollButton, offerRerolls > 0 and not banishMode, COLORS.Accent)
 	banishButton.Visible = offerBanishes > 0
-	banishButton.Text = if banishMode then "Cancel Banish" else ("🚫 Banish (%d)"):format(offerBanishes)
+	setButtonText(banishButton, if banishMode then "Cancel Banish" else ("🚫 Banish (%d)"):format(offerBanishes))
 	upgradeFrame.Visible = true
 	focusFirstButton(cardRow)
 end
@@ -876,12 +1142,13 @@ local function buildUpgradeModal()
 	upgradeFrame = upgradeWindow.Frame
 	upgradeTitle = upgradeWindow.Title
 	upgradeTitle.TextXAlignment = Enum.TextXAlignment.Center
-	cardRow = create("Frame", { Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 1, -66),
-		BackgroundTransparency = 1 }, upgradeWindow.Body)
-	list(cardRow, Enum.FillDirection.Horizontal, CARD_GAP).HorizontalAlignment = Enum.HorizontalAlignment.Center
+	cardRow = create("Frame", { Position = UDim2.fromOffset(0, if Shard then 14 else 8),
+		Size = UDim2.new(1, 0, 1, if Shard then -84 else -66), BackgroundTransparency = 1 }, upgradeWindow.Body)
+	list(cardRow, Enum.FillDirection.Horizontal, if Shard then SHARD_CARD_GAP else CARD_GAP).HorizontalAlignment =
+		Enum.HorizontalAlignment.Center
 
 	local footer: Frame = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
-		Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1 }, upgradeWindow.Body)
+		Size = UDim2.new(1, 0, 0, if Shard then 60 else 46), BackgroundTransparency = 1 }, upgradeWindow.Body)
 	list(footer, Enum.FillDirection.Horizontal, 12).HorizontalAlignment = Enum.HorizontalAlignment.Center
 	rerollButton = newButton(footer, "Reroll", COLORS.Accent, function()
 		sendUpgrade("Reroll", nil)
@@ -917,7 +1184,7 @@ local function showAnchor(state: Payload)
 	anchorDeadline = os.clock() + (tonumber(state.DecisionSeconds) or 45)
 	anchorButtons.Visible = true
 	for _, child in anchorButtons:GetChildren() do
-		if child:IsA("TextButton") then
+		if child:IsA("GuiButton") then
 			setEnabled(child, true, child:GetAttribute("Color") :: Color3)
 		end
 	end
@@ -927,7 +1194,7 @@ end
 
 local function sendAnchor(decision: "Extract" | "Push")
 	for _, child in anchorButtons:GetChildren() do
-		if child:IsA("TextButton") then
+		if child:IsA("GuiButton") then
 			setEnabled(child, false, COLORS.Disabled)
 		end
 	end
@@ -949,7 +1216,8 @@ local function buildAnchorModal()
 		LayoutOrder = 2 })
 	anchorTimer = newLabel(anchorFrame, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = COLORS.Muted,
 		TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 3 })
-	anchorButtons = create("Frame", { Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, LayoutOrder = 4 },
+	anchorButtons = create("Frame", { Size = UDim2.new(1, 0, 0, if Shard then 60 else 52), BackgroundTransparency = 1,
+		LayoutOrder = 4 },
 		anchorFrame)
 	list(anchorButtons, Enum.FillDirection.Horizontal, 14).HorizontalAlignment = Enum.HorizontalAlignment.Center
 	local extract = newButton(anchorButtons, "🏁 Extract to Town", COLORS.Good, function()
@@ -1017,7 +1285,7 @@ local function showDefeat(state: Payload)
 	}
 	for key, option in options do
 		local button = defeatButtons[key]
-		button.Text = option.Text
+		setButtonText(button, option.Text)
 		button.Visible = option.Visible
 		button:SetAttribute("Allowed", option.Allowed)
 		setEnabled(button, option.Allowed, DEFEAT_COLORS[key])
@@ -1031,12 +1299,13 @@ local function showDefeat(state: Payload)
 end
 
 local function buildDefeatScreen()
-	defeatGui = newLayer("RiftCollapse", 40, true)
+	local defeatRoot = newLayer("RiftCollapse", 40, true)
+	defeatGui = defeatRoot.Parent :: ScreenGui
 	defeatGui.Enabled = false
 	create("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.35,
-		Active = true }, defeatGui)
+		Active = true }, defeatRoot)
 
-	local panel = newPanel(defeatGui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	local panel = newPanel(defeatRoot, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(640, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = WINDOW_COLORS.Defeat })
 	pad(panel, 16)
 	local layout = list(panel, Enum.FillDirection.Vertical, 8)
@@ -1093,7 +1362,7 @@ local function paragraph(order: number, label: string, color: Color3?): TextLabe
 end
 
 local function itemRow(order: number, title: string, desc: string, buttonText: string, buttonColor: Color3,
-	enabled: boolean, onClick: () -> ()): TextButton
+	enabled: boolean, onClick: () -> ()): GuiButton
 	local frame: Frame = create("Frame", { Size = UDim2.new(1, -6, 0, 72), BackgroundColor3 = COLORS.PanelLight,
 		LayoutOrder = order }, stationContent)
 	round(frame, 12)
@@ -1125,6 +1394,20 @@ local function closeStation()
 	respecArmed = false
 	stationFrame.Visible = false
 	shopFrame.Visible = false
+	for _, scrim in windowScrims do
+		scrim.Visible = false
+	end
+end
+
+-- The dark veil behind a station / shop window (the pack's Window does the same): it says the game is waiting for
+-- an answer, and clicking it closes the window.
+local function newScrim(layer: Frame): GuiObject
+	local scrim: TextButton = create("TextButton", { Name = "Scrim", Size = UDim2.fromScale(1, 1), Text = "",
+		AutoButtonColor = false, BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.45,
+		BorderSizePixel = 0, Visible = false }, layer)
+	scrim.Activated:Connect(closeStation)
+	table.insert(windowScrims, scrim)
+	return scrim
 end
 
 local function startRun()
@@ -1179,7 +1462,7 @@ local function renderRiftGate()
 	local maxTier = unlockedTierFor(selectedWorld) or 0
 	selectedCorruption = math.clamp(selectedCorruption, 0, maxTier)
 	section(nextOrder(), "Corruption Tier")
-	local stepper: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1,
+	local stepper: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, if Shard then 60 else 40), BackgroundTransparency = 1,
 		LayoutOrder = nextOrder() }, stationContent)
 	local stepLayout = list(stepper, Enum.FillDirection.Horizontal, 8)
 	stepLayout.VerticalAlignment = Enum.VerticalAlignment.Center
@@ -1188,12 +1471,12 @@ local function renderRiftGate()
 		local button = newButton(stepper, text, COLORS.PanelLight, function()
 			selectedCorruption = target
 			renderStation()
-		end, { Size = UDim2.fromOffset(48, 36), LayoutOrder = layoutOrder })
+		end, { Size = UDim2.fromOffset(if Shard then 76 else 48, 36), LayoutOrder = layoutOrder })
 		setEnabled(button, target ~= selectedCorruption, COLORS.PanelLight)
 	end
 	stepButton("-10", -10, 1)
 	stepButton("-1", -1, 2)
-	newLabel(stepper, { Size = UDim2.fromOffset(250, 36), TextXAlignment = Enum.TextXAlignment.Center,
+	newLabel(stepper, { Size = UDim2.fromOffset(if Shard then 200 else 250, 36), TextXAlignment = Enum.TextXAlignment.Center,
 		Font = DISPLAY_FONT, TextSize = 16, LayoutOrder = 3,
 		Text = ("Tier %d  ·  <font color='#%s'>x%.2f rewards</font>"):format(selectedCorruption, COLORS.Gold:ToHex(),
 			FormulaEngine.GetCorruptionEcoMult(selectedCorruption)) })
@@ -1363,7 +1646,9 @@ renderStation = function()
 	stationTitle.Text = if look then ("%s %s"):format(look.Icon, look.Name) else key
 	local color = WINDOW_COLORS[key] or WINDOW_COLORS.RiftGate
 	setWindowColor(stationWindow, color)
-	stationContent.BackgroundColor3 = insetColor(color)
+	if not Shard then
+		stationContent.BackgroundColor3 = insetColor(color)
+	end
 	local scroll = stationContent.CanvasPosition
 	clearGuiChildren(stationContent)
 	renderer()
@@ -1413,6 +1698,9 @@ local function onOpenStation(payload: any)
 		selectedWorld = 1
 	end
 	renderStation()
+	for _, scrim in windowScrims do
+		scrim.Visible = scrim.Parent == (if key == "RiftShrine" then shopFrame.Parent else stationFrame.Parent)
+	end
 	if key == "RiftShrine" then
 		stationFrame.Visible = false
 		shopFrame.Visible = true
@@ -1447,6 +1735,23 @@ local function buildTownMenu()
 	townMenu = create("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0),
 		Size = UDim2.fromOffset(76, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
 	list(townMenu, Enum.FillDirection.Vertical, 10)
+	if Shard then
+		townMenu.Size = UDim2.fromOffset(100, 0)
+		for order, entry in TOWN_MENU do
+			local look = AssetRegistry.TownStations[entry.Station]
+			local slot: Frame = create("Frame", { Size = UDim2.fromOffset(100, 124), BackgroundTransparency = 1,
+				LayoutOrder = order }, townMenu)
+			Shard.IconButton.new({ icon = Shard.Icons[entry.PackIcon], variant = "lg",
+				family = familyFor(if look then look.Color else COLORS.Accent), parent = slot, onClick = function()
+					openStationFromMenu(entry.Station)
+				end })
+			local caption = newLabel(slot, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, 0),
+				Size = UDim2.new(1, 20, 0, 22), Text = entry.Label, Font = DISPLAY_FONT, TextSize = 20,
+				TextXAlignment = Enum.TextXAlignment.Center })
+			create("UIStroke", { Color = COLORS.Stroke, Thickness = 3, LineJoinMode = Enum.LineJoinMode.Round }, caption)
+		end
+		return
+	end
 	for order, entry in TOWN_MENU do
 		local look = AssetRegistry.TownStations[entry.Station]
 		local color = if look then look.Color else COLORS.Accent
@@ -1480,6 +1785,41 @@ local function shopItemInfo(item: ShopItem): (number, boolean, string)
 	end
 	local product = MonetizationConfig.Products[item.Key]
 	return product.Price, false, product.Name
+end
+
+local function buildShardShopCard(item: ShopItem, order: number)
+	local price, owned, fullName = shopItemInfo(item)
+	local buy = function()
+		if not owned then
+			requestPurchase(item.Kind, item.Key)
+		end
+	end
+	local family = familyFor(item.Color)
+	local card = Shard.Card.new({ name = item.Title, variant = "sm", family = family,
+		icon = if item.PackIcon then Shard.Icons[item.PackIcon] else nil,
+		price = if owned then "Owned" else ("R$ %s"):format(formatNumber(price)), layoutOrder = order,
+		activated = buy })
+	-- The price gem sits inside the card and swallows its own clicks, so it buys too.
+	card.Button.Root.MouseButton1Click:Connect(buy)
+	if owned then
+		card.Button:Disable()
+	end
+	if not item.PackIcon then
+		newLabel(card.Thumb, { Size = UDim2.fromScale(1, 1), Text = item.Icon, TextSize = 64, ZIndex = 8,
+			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
+	end
+	card.Root.Parent = shopGrid
+	if item.Tag then
+		Shard.Badge.attachTo(Shard.Badge.new({ text = item.Tag, variant = "sm", family = if family == "red" then "amber" else "red",
+			static = true }), card.Root)
+	end
+	local blurb = ("<b>%s</b>  ·  %s"):format(fullName, SHOP_BLURBS[item.Key] or "")
+	card.Root.MouseEnter:Connect(function()
+		shopInfo.Text = blurb
+	end)
+	card.Root.SelectionGained:Connect(function()
+		shopInfo.Text = blurb
+	end)
 end
 
 local function buildShopCard(item: ShopItem, order: number)
@@ -1528,11 +1868,15 @@ end
 renderShop = function()
 	local data = profile
 	if data then
-		shopWallet.RiftDust.Text = formatNumber(tonumber(data.RiftDust) or 0)
-		shopWallet.RebirthSpark.Text = formatNumber(tonumber(data.RebirthSparksAvailable) or 0)
+		local prefix = function(key: string): string
+			return if Shard then currencyIcon(key) .. " " else ""
+		end
+		shopWallet.RiftDust.Text = prefix("RiftDust") .. formatNumber(tonumber(data.RiftDust) or 0)
+		shopWallet.RebirthSpark.Text = prefix("RebirthSpark") .. formatNumber(tonumber(data.RebirthSparksAvailable) or 0)
 	end
 	for name, button in shopTabs do
-		setEnabled(button, true, if name == shopTab then Color3.fromRGB(95, 210, 255) else Color3.fromRGB(84, 92, 140))
+		local selectedColor = if Shard then COLORS.Gold else Color3.fromRGB(95, 210, 255) -- cyan would vanish on the cyan panel
+		setEnabled(button, true, if name == shopTab then selectedColor else Color3.fromRGB(84, 92, 140))
 	end
 	shopInfo.Text = SHOP_TAB_HINTS[shopTab] or ""
 	local scroll = shopGrid.CanvasPosition
@@ -1541,14 +1885,77 @@ renderShop = function()
 	for _, item in SHOP_ITEMS do
 		if table.find(item.Tabs, shopTab) then
 			order += 1
-			buildShopCard(item, order)
+			if Shard then
+				buildShardShopCard(item, order)
+			else
+				buildShopCard(item, order)
+			end
 		end
 	end
 	shopGrid.CanvasPosition = scroll
 end
 
-local function buildShop()
+local function buildShardShop()
 	local gui = newLayer("RiftShop", 31, false)
+	newScrim(gui)
+	local panel = Shard.Panel.new({ title = "🔮 Shop", family = "cyan", width = 1000, height = 620, headHeight = 80 })
+	shopFrame = panel.Root :: Frame
+	shopFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	shopFrame.Position = UDim2.fromScale(0.5, 0.5)
+	shopFrame.Visible = false
+	panel.Title.TextSize = 32
+
+	for order, key in { "RiftDust", "RebirthSpark" } do
+		local chip = Shard.Chip.new({ text = currencyIcon(key) .. " 0", variant = "sm", family = "slate", static = true,
+			width = 140, parent = panel.Tools })
+		chip.Root.LayoutOrder = order
+		shopWallet[key] = chip.Label
+	end
+	Shard.IconButton.new({ icon = Shard.Icons.Close, variant = "sm", family = "red", parent = panel.Tools,
+		onClick = closeStation }).Root.LayoutOrder = 3
+
+	local body = panel.Body :: Frame
+	local sidebar: Frame = create("Frame", { Size = UDim2.new(0, 180, 1, 0), BackgroundTransparency = 1 }, body)
+	list(sidebar, Enum.FillDirection.Vertical, 12)
+	for order, name in SHOP_TABS do
+		shopTabs[name] = newButton(sidebar, name, Color3.fromRGB(84, 92, 140), function()
+			shopTab = name
+			shopGrid.CanvasPosition = Vector2.zero
+			renderShop()
+		end, { Size = UDim2.new(1, 0, 0, 54), TextSize = 22, LayoutOrder = order })
+	end
+
+	local infoBar = Shard.Inset.new({ family = "cyan", size = UDim2.new(1, -196, 0, 58), parent = body, scroll = false })
+	infoBar.Root.Position = UDim2.fromOffset(196, 0)
+	shopInfo = newLabel(infoBar.Body, { Size = UDim2.fromScale(1, 1), TextSize = 17, TextColor3 = COLORS.Muted,
+		TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd })
+	-- The inset's padding is tuned for lists; a one-line strip needs less.
+	local infoPad = infoBar.Body:FindFirstChildOfClass("UIPadding")
+	if infoPad then
+		infoPad.PaddingTop = UDim.new(0, 6)
+		infoPad.PaddingBottom = UDim.new(0, 6)
+	end
+
+	local grid = Shard.Inset.new({ family = "cyan", size = UDim2.new(1, -196, 1, -72), parent = body, scroll = true })
+	grid.Root.Position = UDim2.fromOffset(196, 72)
+	shopGrid = grid.Body :: ScrollingFrame
+	if grid.Layout then
+		grid.Layout:Destroy()
+	end
+	local cardSize: Vector2 = Shard.Card.size("sm")
+	create("UIGridLayout", { CellSize = UDim2.fromOffset(cardSize.X, cardSize.Y), CellPadding = UDim2.fromOffset(18, 26),
+		SortOrder = Enum.SortOrder.LayoutOrder }, shopGrid)
+
+	panel.Root.Parent = gui
+end
+
+local function buildShop()
+	if Shard then
+		buildShardShop()
+		return
+	end
+	local gui = newLayer("RiftShop", 31, false)
+	newScrim(gui)
 	shopFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.54),
 		Size = UDim2.fromOffset(900, 610), BackgroundColor3 = WINDOW_COLORS.Shop, Visible = false })
 
@@ -1619,10 +2026,18 @@ end
 
 local function buildStationPanel()
 	local gui = newLayer("RiftStations", 30, false)
+	newScrim(gui)
 	stationWindow = newWindow(gui, WINDOW_COLORS.RiftGate, { AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.54), Size = UDim2.fromOffset(660, 540), Visible = false }, closeStation)
 	stationFrame = stationWindow.Frame
 	stationTitle = stationWindow.Title
+	if Shard then
+		-- The pack's recessed "creux": an untinted darkening of whatever panel colour sits behind it.
+		local inset = Shard.Inset.new({ family = "violet", size = UDim2.fromScale(1, 1), parent = stationWindow.Body,
+			scroll = true, padding = 10 })
+		stationContent = inset.Body :: ScrollingFrame
+		return
+	end
 	stationContent = create("ScrollingFrame", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = insetColor(WINDOW_COLORS.RiftGate),
