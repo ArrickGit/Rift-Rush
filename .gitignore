@@ -1,0 +1,19 @@
+# Project place file
+/roblox_roguelike.rbxlx
+
+# Roblox Studio lock files
+/*.rbxlx.lock
+/*.rbxl.lock
+
+# Roblox place/model files (built from source via Rojo)
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+
+# Auto-generated sourcemaps & packages
+sourcemap.json
+/Packages/
+
+# macOS system files
+.DS_Store
