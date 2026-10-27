@@ -358,6 +358,9 @@ local function beginMove(state: EnemyState, move: MoveSpec, target: Target, now:
 	local windup = move.Windup * (if enraged(state) then ENRAGE_WINDUP_MULT else 1)
 	boss.StageEndsAt = now + windup
 	setAIState(state, "Windup")
+	-- The client's rig animator picks the wind-up pose (arms raised, lean back...) from these.
+	setAttr(state, "Move", move.Kind)
+	setAttr(state, "WindupDur", windup)
 
 	local x, fy = state.Feet.X, state.Feet.Y
 	if move.Kind == "GroundPound" then
@@ -493,6 +496,7 @@ end
 local function stepBoss(state: EnemyState, now: number, targets: { Target }, target: Target?)
 	local boss = state.Boss :: BossState
 	checkEnrage(state)
+	setAttr(state, "Facing", state.Facing) -- the client turns the boss toward its target, even mid-windup
 
 	if boss.Stage == "Think" then
 		if target then
@@ -544,6 +548,7 @@ local function stepBoss(state: EnemyState, now: number, targets: { Target }, tar
 			local delay = (state.Info.ThinkDelay or 1.2) * (if enraged(state) then ENRAGE_THINK_MULT else 1)
 			boss.NextMoveAt = now + delay
 			boss.Move = nil
+			setAttr(state, "Move", "")
 		end
 	end
 end
@@ -656,6 +661,7 @@ function EnemyAIService.Stun(state: EnemyState, seconds: number)
 	if boss and boss.Stage ~= "Think" then
 		boss.Stage = "Think"
 		boss.Move = nil
+		setAttr(state, "Move", "")
 		boss.NextMoveAt = state.StunUntil + 0.6
 	end
 	setAIState(state, "Stunned")

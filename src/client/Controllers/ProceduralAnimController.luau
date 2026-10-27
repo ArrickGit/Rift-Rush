@@ -14,11 +14,13 @@
 
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local EnemyConfig = require(Shared:WaitForChild("EnemyConfig"))
+local RigAnimator = require(script.Parent:WaitForChild("RigAnimator"))
 
 local FOLDER_NAME = "RiftEnemyVisuals"
 local SMOOTHING = 22 -- exponential follow rate toward the server position
@@ -44,6 +46,17 @@ local SHOCK_COLOR = Color3.fromRGB(255, 240, 90)
 local BAR_BACK = Color3.fromRGB(20, 20, 28)
 local BAR_FILL = Color3.fromRGB(235, 70, 80)
 local BAR_BOSS_FILL = Color3.fromRGB(190, 60, 255)
+local ENRAGE_COLOR = Color3.fromRGB(255, 60, 50)
+local CALLOUT_FONT = Enum.Font.FredokaOne
+local CALLOUT_DANGER = Color3.fromRGB(255, 96, 70)
+local CALLOUT_EXPOSED = Color3.fromRGB(110, 235, 130)
+-- What the boss is about to do and how to answer it; shown above its health bar for the whole windup.
+local MOVE_CALLOUTS: { [string]: string } = {
+	GroundPound = "SLAM - JUMP!",
+	BoulderCharge = "CHARGE - GET CLEAR!",
+	PoisonWave = "POISON WAVE - JUMP!",
+	SporeBoulder = "BOULDER - HIT IT BACK!",
+}
 
 type PartInfo = { Part: BasePart, Size: Vector3, Offset: CFrame }
 
@@ -68,6 +81,9 @@ type Proxy = {
 	LastHP: number,
 	Highlight: Highlight?,
 	BarFill: Frame?,
+	Rig: RigAnimator.Rig?,
+	StateName: string,
+	StateSince: number,
 	Dying: boolean,
 	DyingStart: number,
 	DyingScale: Vector3,
@@ -157,6 +173,105 @@ local function buildHealthBar(proxy: Proxy, kind: string)
 	proxy.BarFill = fill
 end
 
+-- Boss callout: one banner at the top of the screen says what the boss is winding up and counts the telegraph
+-- down, then flags the exposed recovery window. It lives on screen (not above the boss) because bosses are taller
+-- than the close 2.5D camera frames them.
+local bannerGui: ScreenGui
+local bannerFrame: Frame
+local bannerLabel: TextLabel
+local bannerFill: Frame
+local bannerText: string? = nil
+local bannerColor = CALLOUT_DANGER
+local bannerFraction = 1
+
+local function buildBanner()
+	bannerGui = Instance.new("ScreenGui")
+	bannerGui.Name = "RiftBossCallout"
+	bannerGui.ResetOnSpawn = false
+	bannerGui.DisplayOrder = 6
+	bannerGui.IgnoreGuiInset = true
+	bannerGui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+	bannerFrame = Instance.new("Frame")
+	bannerFrame.AnchorPoint = Vector2.new(0.5, 0)
+	bannerFrame.Position = UDim2.new(0.5, 0, 0, 150)
+	bannerFrame.Size = UDim2.fromOffset(340, 62)
+	bannerFrame.BackgroundColor3 = Color3.fromRGB(13, 21, 36)
+	bannerFrame.BackgroundTransparency = 0.12
+	bannerFrame.BorderSizePixel = 0
+	bannerFrame.Visible = false
+	bannerFrame.Parent = bannerGui
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = bannerFrame
+	local stroke = Instance.new("UIStroke")
+	stroke.Name = "Edge"
+	stroke.Thickness = 3
+	stroke.Color = CALLOUT_DANGER
+	stroke.Parent = bannerFrame
+
+	bannerLabel = Instance.new("TextLabel")
+	bannerLabel.BackgroundTransparency = 1
+	bannerLabel.Position = UDim2.fromOffset(0, 6)
+	bannerLabel.Size = UDim2.new(1, 0, 0, 32)
+	bannerLabel.Font = CALLOUT_FONT
+	bannerLabel.TextSize = 28
+	bannerLabel.TextColor3 = CALLOUT_DANGER
+	bannerLabel.Parent = bannerFrame
+	local labelStroke = Instance.new("UIStroke")
+	labelStroke.Color = Color3.fromRGB(13, 21, 36)
+	labelStroke.Thickness = 3
+	labelStroke.Parent = bannerLabel
+
+	local track = Instance.new("Frame")
+	track.AnchorPoint = Vector2.new(0.5, 0)
+	track.Position = UDim2.new(0.5, 0, 0, 42)
+	track.Size = UDim2.new(1, -36, 0, 10)
+	track.BackgroundColor3 = Color3.fromRGB(34, 44, 68)
+	track.BorderSizePixel = 0
+	track.Parent = bannerFrame
+	local trackCorner = Instance.new("UICorner")
+	trackCorner.CornerRadius = UDim.new(1, 0)
+	trackCorner.Parent = track
+	bannerFill = Instance.new("Frame")
+	bannerFill.Size = UDim2.fromScale(1, 1)
+	bannerFill.BackgroundColor3 = CALLOUT_DANGER
+	bannerFill.BorderSizePixel = 0
+	bannerFill.Parent = track
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(1, 0)
+	fillCorner.Parent = bannerFill
+end
+
+-- Called per boss each frame; the most urgent request wins (a windup beats an exposed window).
+local function requestCallout(stateName: string, move: string, stateTime: number, windup: number)
+	if stateName == "Windup" and MOVE_CALLOUTS[move] then
+		bannerText = MOVE_CALLOUTS[move]
+		bannerColor = CALLOUT_DANGER
+		bannerFraction = math.clamp(1 - stateTime / math.max(windup, 0.1), 0, 1)
+	elseif stateName == "Recovery" and stateTime > 0.3 and bannerText == nil then
+		bannerText = "EXPOSED - ATTACK!"
+		bannerColor = CALLOUT_EXPOSED
+		bannerFraction = 1
+	end
+end
+
+local function applyBanner()
+	local text = bannerText
+	bannerFrame.Visible = text ~= nil
+	if text then
+		bannerLabel.Text = text
+		bannerLabel.TextColor3 = bannerColor
+		bannerFill.BackgroundColor3 = bannerColor
+		bannerFill.Size = UDim2.fromScale(bannerFraction, 1)
+		local edge = bannerFrame:FindFirstChild("Edge")
+		if edge and edge:IsA("UIStroke") then
+			edge.Color = bannerColor
+		end
+	end
+	bannerText = nil
+end
+
 local function updateBar(proxy: Proxy)
 	local fill = proxy.BarFill
 	if not fill then
@@ -233,6 +348,9 @@ local function createProxy(model: Model)
 		LastHP = if type(hp) == "number" then hp else 0,
 		Highlight = nil,
 		BarFill = nil,
+		Rig = RigAnimator.new(visual),
+		StateName = "Idle",
+		StateSince = os.clock(),
 		Dying = false,
 		DyingStart = 0,
 		DyingScale = Vector3.one,
@@ -327,6 +445,13 @@ local function updateHighlight(proxy: Proxy, now: number)
 		status.OutlineColor = color
 		status.OutlineTransparency = 0.2
 		status.Enabled = true
+	elseif proxy.Model:GetAttribute("Phase") == 2 then
+		-- A boss past its enrage threshold pulses a red outline so the faster second phase is obvious.
+		local rage = getHighlight(proxy)
+		rage.FillTransparency = 1
+		rage.OutlineColor = ENRAGE_COLOR
+		rage.OutlineTransparency = 0.45 + 0.3 * math.sin(now * 5)
+		rage.Enabled = true
 	elseif highlight and highlight.Enabled then
 		highlight.Enabled = false
 	end
@@ -360,7 +485,11 @@ local function stepProxy(proxy: Proxy, now: number, dt: number)
 	end
 	proxy.LastSmoothed = proxy.Smoothed
 
-	if math.abs(proxy.VelX) > FACING_MIN_SPEED then
+	local facingAttribute = model:GetAttribute("Facing")
+	if type(facingAttribute) == "number" and facingAttribute ~= 0 then
+		-- Bosses publish which way they face (toward their target), also while standing still in a windup.
+		proxy.Facing = if facingAttribute > 0 then 1 else -1
+	elseif math.abs(proxy.VelX) > FACING_MIN_SPEED then
 		proxy.Facing = if proxy.VelX > 0 then 1 else -1
 	end
 	-- Turning between left and right swings through "facing the camera", never through facing away.
@@ -398,6 +527,34 @@ local function stepProxy(proxy: Proxy, now: number, dt: number)
 		scaleX = 1 - BREATH_X * breath
 	end
 
+	local rig = proxy.Rig
+	if rig then
+		-- A skeleton does the posing; the whole-body squash and stretch would fight it.
+		scaleX, scaleY = 1, 1
+		local stateName = if type(state) == "string" then state else "Idle"
+		if stateName ~= proxy.StateName then
+			proxy.StateName = stateName
+			proxy.StateSince = now
+		end
+		local move = model:GetAttribute("Move")
+		local windup = model:GetAttribute("WindupDur")
+		local moveName = if type(move) == "string" then move else ""
+		local windupSeconds = if type(windup) == "number" then windup else 1
+		local stateTime = now - proxy.StateSince
+		RigAnimator.Update(rig, {
+			State = stateName,
+			Move = moveName,
+			StateTime = stateTime,
+			WindupDuration = windupSeconds,
+			Speed = math.abs(proxy.VelX),
+			Time = t,
+			Enraged = model:GetAttribute("Phase") == 2,
+		}, dt)
+		if model:GetAttribute("EnemyKind") == "Boss" then
+			requestCallout(stateName, moveName, stateTime, windupSeconds)
+		end
+	end
+
 	roll += -math.clamp(proxy.VelX * LEAN_PER_SPEED, -MAX_LEAN, MAX_LEAN)
 	if now < proxy.TiltUntil then
 		roll -= TILT_RADIANS * proxy.HitDir * ((proxy.TiltUntil - now) / TILT_SECONDS)
@@ -413,6 +570,7 @@ function ProceduralAnimController.Init()
 	visualFolder.Name = FOLDER_NAME
 	visualFolder.Parent = Workspace
 
+	buildBanner()
 	for _, instance in CollectionService:GetTagged(EnemyConfig.TAG) do
 		onTagged(instance)
 	end
@@ -424,6 +582,7 @@ function ProceduralAnimController.Init()
 		for _, proxy in proxies do
 			stepProxy(proxy, now, dt)
 		end
+		applyBanner()
 	end)
 end
 

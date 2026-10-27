@@ -11,6 +11,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
+local ModelNormalizer = require(Shared:WaitForChild("ModelNormalizer"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local AscensionShopService = require(script.Parent:WaitForChild("AscensionShopService"))
 local RebirthService = require(script.Parent:WaitForChild("RebirthService"))
@@ -43,6 +44,33 @@ local ACTION_TEXT: { [string]: string } = {
 	QuestBoard = "Quests",
 	HallOfChampions = "Leaderboards",
 	RiftShrine = "Trigger Rift Surge",
+}
+
+-- Props from ReplicatedStorage.Assets.Decor scattered on the ground tier: { name, x offset from the Rift Gate,
+-- depth behind the lane (studs), height in studs }. Stations keep a clear 12-stud margin so nothing hides them.
+local DECOR: { { Name: string, X: number, Depth: number, Height: number } } = {
+	{ Name = "Cabinet", X = -150, Depth = 7, Height = 6 },
+	{ Name = "Barrel", X = -140, Depth = 5, Height = 4 },
+	{ Name = "Crate_Wooden", X = -136, Depth = 6, Height = 3.2 },
+	{ Name = "Torch_Metal", X = -108, Depth = 4, Height = 7 },
+	{ Name = "Stall_Cart_Empty", X = -96, Depth = 8, Height = 8 },
+	{ Name = "Bench", X = -80, Depth = 5, Height = 3 },
+	{ Name = "Vase_2", X = -64, Depth = 4, Height = 3.5 },
+	{ Name = "Workbench", X = -46, Depth = 7, Height = 4 },
+	{ Name = "Barrel_Apples", X = -34, Depth = 5, Height = 4 },
+	{ Name = "FarmCrate_Apple", X = -29, Depth = 6, Height = 3 },
+	{ Name = "Torch_Metal", X = -20, Depth = 4, Height = 7 },
+	{ Name = "Torch_Metal", X = 20, Depth = 4, Height = 7 },
+	{ Name = "Table_Large", X = 34, Depth = 7, Height = 3.4 },
+	{ Name = "Stool", X = 42, Depth = 5, Height = 2.2 },
+	{ Name = "Pot_1", X = 52, Depth = 4, Height = 3 },
+	{ Name = "Peg_Rack", X = 62, Depth = 7, Height = 5 },
+	{ Name = "Chest_Wood", X = 98, Depth = 5, Height = 3 },
+	{ Name = "Bucket_Wooden_1", X = 106, Depth = 4, Height = 2.6 },
+	{ Name = "Dummy", X = 116, Depth = 6, Height = 7 },
+	{ Name = "Vase_4", X = 144, Depth = 4, Height = 3.5 },
+	{ Name = "Crate_Metal", X = 150, Depth = 6, Height = 3.4 },
+	{ Name = "Cabinet", X = 162, Depth = 7, Height = 6 },
 }
 
 local openStationRemote: RemoteEvent
@@ -97,6 +125,37 @@ local function wireStation(stationKey: string, model: Model)
 	end)
 end
 
+-- Anchored, non-colliding set dressing standing on the same ground as the Rift Gate, behind the 2.5D lane.
+local function placeDecor(hub: TownHub)
+	local gate = hub.Stations.RiftGate
+	local decorAssets = ReplicatedStorage:FindFirstChild("Assets")
+	local decorFolder = if decorAssets then decorAssets:FindFirstChild("Decor") else nil
+	if not (gate and decorFolder) then
+		return
+	end
+	local origin = gate:GetPivot().Position
+	local folder = Instance.new("Folder")
+	folder.Name = "Decor"
+	folder.Parent = hub.Folder
+	for _, entry in DECOR do
+		local prefab = decorFolder:FindFirstChild(entry.Name)
+		if not (prefab and prefab:IsA("Model")) then
+			continue
+		end
+		local model = ModelNormalizer.SanitizeAndNormalize(prefab:Clone(), Vector3.new(entry.Height, entry.Height, entry.Height))
+		local center, size = model:GetBoundingBox()
+		local want = Vector3.new(origin.X + entry.X, origin.Y + size.Y / 2, origin.Z - entry.Depth)
+		model:PivotTo(model:GetPivot() + (want - center.Position))
+		for _, descendant in model:GetDescendants() do
+			if descendant:IsA("BasePart") then
+				descendant.CanQuery = false
+				descendant.CanTouch = false
+			end
+		end
+		model.Parent = folder
+	end
+end
+
 function TownHubService.Init()
 	Remotes.Init()
 	openStationRemote = Remotes.GetEvent("OpenStation")
@@ -127,6 +186,7 @@ function TownHubService.Init()
 	end
 	local hub = RoomBuilderService.BuildTownHub(TOWN_ORIGIN, Workspace)
 	TownHubService.Hub = hub
+	placeDecor(hub)
 	for stationKey, model in hub.Stations do
 		wireStation(stationKey, model)
 	end
