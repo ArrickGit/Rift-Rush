@@ -17,3 +17,15 @@ sourcemap.json
 
 # macOS system files
 .DS_Store
+
+# Downloaded art packs (322 MB of zips/models; imported into the place file, not synced by Rojo)
+/assets/
+
+# Local tooling binaries and downloads
+/luau-lsp
+/luau-lsp-macos.zip
+/roblox-game-skill-main.zip
+
+# Research output (asset-sourcing notes and reports)
+/reports/
+/research_notes/

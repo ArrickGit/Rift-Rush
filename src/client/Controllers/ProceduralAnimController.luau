@@ -34,6 +34,9 @@ local LEAN_PER_SPEED = 0.012
 local MAX_LEAN = 0.25
 local DEATH_SECONDS = 0.28
 local DEATH_SPIN = 9
+local TURN_ANGLE = math.rad(45) -- three-quarter view: turned this far from the camera toward the walk direction
+local TURN_RATE = 10
+local FACING_MIN_SPEED = 0.5 -- slower than this keeps the previous facing
 
 local HIT_FLASH_COLOR = Color3.new(1, 1, 1)
 local BURN_COLOR = Color3.fromRGB(255, 140, 40)
@@ -54,6 +57,9 @@ type Proxy = {
 	VelX: number,
 	VelY: number,
 	Phase: number,
+	BaseYaw: number,
+	Facing: number,
+	Turn: number,
 	WasAirborne: boolean,
 	LandUntil: number,
 	FlashUntil: number,
@@ -90,9 +96,10 @@ local function buildVisual(model: Model): (Model, { PartInfo })
 	local pivot = visual:GetPivot()
 	local parts: { PartInfo } = {}
 	for _, descendant in visual:GetDescendants() do
+		-- Bones are Attachments too, but imported rigged meshes (skinned MeshParts) render wrong without them.
 		if descendant:IsA("LuaSourceContainer") or descendant:IsA("ClickDetector") or descendant:IsA("WeldConstraint")
 			or descendant:IsA("Weld") or descendant:IsA("ProximityPrompt") or descendant:IsA("Constraint")
-			or descendant:IsA("Attachment") then
+			or (descendant:IsA("Attachment") and not descendant:IsA("Bone")) then
 			descendant:Destroy()
 		end
 	end
@@ -203,6 +210,8 @@ local function createProxy(model: Model)
 	local _, size = model:GetBoundingBox()
 	local pivot = model:GetPivot().Position
 	local hp = model:GetAttribute("HP")
+	local facingYaw = model:GetAttribute("FacingYaw")
+	local facing = if rng:NextNumber() < 0.5 then -1 else 1
 	local proxy: Proxy = {
 		Model = model,
 		Visual = visual,
@@ -213,6 +222,9 @@ local function createProxy(model: Model)
 		VelX = 0,
 		VelY = 0,
 		Phase = rng:NextNumber(0, math.pi * 2),
+		BaseYaw = math.rad(if type(facingYaw) == "number" then facingYaw else 0),
+		Facing = facing,
+		Turn = facing * TURN_ANGLE,
 		WasAirborne = false,
 		LandUntil = 0,
 		FlashUntil = 0,
@@ -284,7 +296,8 @@ end
 
 local function applyPose(proxy: Proxy, scaleX: number, scaleY: number, roll: number)
 	local center = proxy.Smoothed + Vector3.new(0, proxy.HalfY * (scaleY - 1), 0)
-	local base = CFrame.new(center) * CFrame.Angles(0, 0, roll)
+	-- Lean / tilt (roll) is in the screen plane; the yaw turns the model toward the camera and its walk direction.
+	local base = CFrame.new(center) * CFrame.Angles(0, 0, roll) * CFrame.Angles(0, proxy.BaseYaw + proxy.Turn, 0)
 	local scale = Vector3.new(scaleX, scaleY, scaleX)
 	for _, info in proxy.Parts do
 		local offset = info.Offset
@@ -346,6 +359,12 @@ local function stepProxy(proxy: Proxy, now: number, dt: number)
 		proxy.VelY = velocity.Y
 	end
 	proxy.LastSmoothed = proxy.Smoothed
+
+	if math.abs(proxy.VelX) > FACING_MIN_SPEED then
+		proxy.Facing = if proxy.VelX > 0 then 1 else -1
+	end
+	-- Turning between left and right swings through "facing the camera", never through facing away.
+	proxy.Turn += (proxy.Facing * TURN_ANGLE - proxy.Turn) * (1 - math.exp(-TURN_RATE * dt))
 
 	local airborne = model:GetAttribute("Airborne") == true
 	if proxy.WasAirborne and not airborne then

@@ -48,20 +48,32 @@ local CARD_GAP = 12
 local STATION_REFRESH_DELAY = 0.3 -- coalesces ProfileUpdated bursts into one GetStationData call
 local CHOICE_RETRY_SECONDS = 2 -- defeat buttons re-enable if the server rejected the choice
 
+-- Cartoon "simulator" look: saturated colours, thick dark outlines, top-lit gradients and a rounded display font.
 local COLORS = {
-	Panel = Color3.fromRGB(22, 20, 36),
-	PanelLight = Color3.fromRGB(40, 36, 62),
-	Stroke = Color3.fromRGB(110, 80, 170),
-	Text = Color3.fromRGB(238, 236, 248),
-	Muted = Color3.fromRGB(165, 160, 190),
-	Accent = Color3.fromRGB(150, 80, 230),
-	Gold = Color3.fromRGB(255, 210, 90),
-	Good = Color3.fromRGB(60, 180, 110),
-	Bad = Color3.fromRGB(215, 65, 90),
-	Robux = Color3.fromRGB(0, 150, 95),
-	HP = Color3.fromRGB(230, 65, 85),
-	XP = Color3.fromRGB(80, 180, 255),
-	Disabled = Color3.fromRGB(70, 68, 86),
+	Panel = Color3.fromHex("4a5c86"), -- slate: HUD pills, toasts, rows
+	PanelLight = Color3.fromHex("5d719a"),
+	Stroke = Color3.fromHex("0d1524"), -- the one outline colour everything shares
+	Text = Color3.fromRGB(255, 255, 255),
+	Muted = Color3.fromHex("cfdaf0"),
+	Accent = Color3.fromHex("8a6bf0"),
+	Gold = Color3.fromHex("ffb724"),
+	Good = Color3.fromHex("5fcf34"),
+	Bad = Color3.fromHex("f4523f"),
+	Robux = Color3.fromHex("5fcf34"),
+	HP = Color3.fromHex("f4523f"),
+	XP = Color3.fromHex("45cff0"),
+	Disabled = Color3.fromHex("6b7896"),
+}
+
+-- Window body colours (a darker header strip and content inset are derived from each).
+local WINDOW_COLORS = {
+	Shop = Color3.fromHex("3fb4d8"),
+	RiftGate = Color3.fromHex("8a6bf0"),
+	AscensionPedestal = Color3.fromHex("f26a97"),
+	SparkSanctum = Color3.fromHex("f0a81f"),
+	Upgrade = Color3.fromHex("8a6bf0"),
+	Anchor = Color3.fromHex("3fb4d8"),
+	Defeat = Color3.fromHex("d24a4a"),
 }
 
 local TIER_NAMES: { [number]: string } = {
@@ -85,11 +97,41 @@ local TOWN_MENU: { { Station: string, Label: string } } = {
 	{ Station = "AscensionPedestal", Label = "Rebirth" },
 }
 
-local SHRINE_PRODUCTS = { "RiftSurge", "SuperchargedRunToken", "RerollPack5", "KeepEverythingSeal", "StarForceSafeguardPack" }
-local SHRINE_PASSES = {
-	"TrueAscendant", "DoubleXP", "DoubleDust", "VIPArchitect", "BanishPass", "VaultInsurance", "RelicVaultKey",
-	"ExtraLinkSlots",
+-- Rift Shrine store cards (renderShop). Price and ownership come from MonetizationConfig; this only styles them.
+-- Kind "Product" / "Pass" are Robux purchases; a future in-game-currency item would add its own Kind.
+type ShopItem = { Key: string, Kind: "Product" | "Pass", Title: string, Icon: string, Color: Color3, Tag: string?,
+	Tabs: { string } }
+
+local SHOP_TABS = { "Featured", "Boosts", "Passes", "Rebirth" }
+local SHOP_ITEMS: { ShopItem } = {
+	{ Key = "RiftSurge", Kind = "Product", Title = "Rift Surge", Icon = "⚡", Color = Color3.fromRGB(40, 185, 230),
+		Tag = "Server", Tabs = { "Featured", "Boosts" } },
+	{ Key = "TrueAscendant", Kind = "Pass", Title = "True Ascendant", Icon = "👑", Color = Color3.fromRGB(255, 170, 30),
+		Tag = "Best", Tabs = { "Featured", "Rebirth", "Passes" } },
+	{ Key = "DoubleXP", Kind = "Pass", Title = "2x Hunter XP", Icon = "⭐", Color = Color3.fromRGB(80, 200, 80),
+		Tag = "x2", Tabs = { "Featured", "Passes" } },
+	{ Key = "DoubleDust", Kind = "Pass", Title = "2x Rift Dust", Icon = "🔮", Color = Color3.fromRGB(160, 80, 250),
+		Tag = "x2", Tabs = { "Featured", "Passes" } },
+	{ Key = "SuperchargedRunToken", Kind = "Product", Title = "Supercharge", Icon = "🚀", Color = Color3.fromRGB(255, 120, 50),
+		Tag = "x2 Dust", Tabs = { "Featured", "Boosts" } },
+	{ Key = "VIPArchitect", Kind = "Pass", Title = "4th Card", Icon = "🃏", Color = Color3.fromRGB(240, 70, 160),
+		Tag = "VIP", Tabs = { "Featured", "Passes" } },
+	{ Key = "RerollPack5", Kind = "Product", Title = "Rerolls", Icon = "🎲", Color = Color3.fromRGB(70, 130, 255),
+		Tag = "x5", Tabs = { "Featured", "Boosts" } },
+	{ Key = "KeepEverythingSeal", Kind = "Product", Title = "Keep Seal", Icon = "📜", Color = Color3.fromRGB(230, 60, 90),
+		Tag = "1 use", Tabs = { "Featured", "Rebirth" } },
+	{ Key = "StarForceSafeguardPack", Kind = "Product", Title = "Safeguards", Icon = "🛡️", Color = Color3.fromRGB(60, 170, 200),
+		Tag = "x3", Tabs = { "Boosts" } },
+	{ Key = "BanishPass", Kind = "Pass", Title = "Banish Pass", Icon = "🚫", Color = Color3.fromRGB(225, 70, 70),
+		Tabs = { "Passes" } },
+	{ Key = "VaultInsurance", Kind = "Pass", Title = "Insurance", Icon = "🏦", Color = Color3.fromRGB(40, 175, 150),
+		Tabs = { "Passes" } },
+	{ Key = "RelicVaultKey", Kind = "Pass", Title = "Relic Key", Icon = "🗝️", Color = Color3.fromRGB(230, 150, 40),
+		Tabs = { "Passes" } },
+	{ Key = "ExtraLinkSlots", Kind = "Pass", Title = "+2 Links", Icon = "🔗", Color = Color3.fromRGB(90, 110, 240),
+		Tag = "+2", Tabs = { "Passes" } },
 }
+
 local SHOP_BLURBS: { [string]: string } = {
 	RiftSurge = "x1.5 Hunter XP & Rift Dust for the whole server (15 min, stacks)",
 	SuperchargedRunToken = "Your next run pays x2 Rift Dust",
@@ -106,11 +148,16 @@ local SHOP_BLURBS: { [string]: string } = {
 	ExtraLinkSlots = "+2 Hunter Legion Link Skill slots",
 }
 
+local DISPLAY_FONT = Enum.Font.FredokaOne -- titles, buttons, numbers
+local BODY_FONT = Enum.Font.BuilderSansBold -- descriptions and small print
+
 local LABEL_DEFAULTS: Payload = {
 	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamMedium,
+	Font = BODY_FONT,
 	TextColor3 = COLORS.Text,
-	TextSize = 14,
+	TextStrokeColor3 = COLORS.Stroke,
+	TextStrokeTransparency = 0.55,
+	TextSize = 15,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	RichText = true,
 }
@@ -159,6 +206,7 @@ local healthConnections: { RBXScriptConnection } = {}
 
 -- Upgrade modal
 local upgradeFrame: Frame
+local upgradeWindow: Window
 local upgradeTitle: TextLabel
 local cardRow: Frame
 local rerollButton: TextButton
@@ -188,6 +236,14 @@ local defeatOpen = false
 
 -- Station panels
 local stationFrame: Frame
+local stationWindow: Window
+local shopFrame: Frame
+local shopGrid: ScrollingFrame
+local shopTabs: { [string]: TextButton } = {}
+local shopInfo: TextLabel
+local shopWallet: { [string]: TextLabel } = {}
+local shopTab = "Featured"
+local renderShop: () -> ()
 local townMenu: Frame
 local stationTitle: TextLabel
 local stationContent: ScrollingFrame
@@ -249,33 +305,111 @@ local function newLabel(parent: Instance, props: Payload): TextLabel
 	return create("TextLabel", merged(LABEL_DEFAULTS, props), parent)
 end
 
+-- A UIGradient multiplies the background colour, so white -> grey keeps any BackgroundColor3 but lights it from the top.
+local function topLit(parent: Instance, shade: number)
+	create("UIGradient", {
+		Rotation = 90,
+		Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.new(shade, shade, shade)),
+	}, parent)
+end
+
+local function edgeColor(color: Color3): Color3
+	return color:Lerp(Color3.new(0, 0, 0), 0.62)
+end
+
+-- Soft diagonal stripes over the icon box, standing in for the sunburst art in cartoon stores.
+local function addStripes(parent: GuiObject, radius: number)
+	local stripes: Frame = create("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0 }, parent)
+	round(stripes, radius)
+	local keypoints: { NumberSequenceKeypoint } = {}
+	for index = 0, 19 do
+		table.insert(keypoints, NumberSequenceKeypoint.new(index / 19, if index % 2 == 0 then 1 else 0.82))
+	end
+	create("UIGradient", { Rotation = 35, Transparency = NumberSequence.new(keypoints) }, stripes)
+end
+
 local function newPanel(parent: Instance, props: Payload): Frame
-	local frame: Frame = create("Frame", merged({ BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.1 }, props), parent)
-	round(frame, 10)
-	outline(frame, COLORS.Stroke, 1.5)
+	local frame: Frame = create("Frame", merged({ BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.04 }, props), parent)
+	round(frame, 14)
+	outline(frame, COLORS.Stroke, 3)
+	topLit(frame, 0.72)
 	return frame
+end
+
+local HOVER_TWEEN = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local PRESS_TWEEN = TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local RELEASE_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+-- Grows on hover and squishes when pressed, springing back on release.
+local function addPressFeedback(button: GuiButton)
+	local scale: UIScale = create("UIScale", {}, button)
+	local hovering = false
+	local function enabled(): boolean
+		return button:GetAttribute("Enabled") ~= false
+	end
+	button.MouseEnter:Connect(function()
+		hovering = true
+		if enabled() then
+			TweenService:Create(scale, HOVER_TWEEN, { Scale = 1.05 }):Play()
+		end
+	end)
+	button.MouseLeave:Connect(function()
+		hovering = false
+		TweenService:Create(scale, HOVER_TWEEN, { Scale = 1 }):Play()
+	end)
+	button.MouseButton1Down:Connect(function()
+		if enabled() then
+			TweenService:Create(scale, PRESS_TWEEN, { Scale = 0.9 }):Play()
+		end
+	end)
+	button.MouseButton1Up:Connect(function()
+		TweenService:Create(scale, RELEASE_TWEEN, { Scale = if hovering then 1.05 else 1 }):Play()
+	end)
 end
 
 local function setEnabled(button: TextButton, enabled: boolean, color: Color3)
 	button:SetAttribute("Enabled", enabled)
-	button.AutoButtonColor = enabled
+	button.AutoButtonColor = false
 	button.BackgroundColor3 = if enabled then color else COLORS.Disabled
-	button.TextTransparency = if enabled then 0 else 0.4
+	button.TextTransparency = if enabled then 0 else 0.35
+	local stroke = button:FindFirstChild("Edge")
+	if stroke and stroke:IsA("UIStroke") then
+		stroke.Color = edgeColor(button.BackgroundColor3)
+	end
 end
 
+-- Chunky cartoon button: saturated top-lit fill, thick darker edge, a glossy highlight, outlined display text.
 local function newButton(parent: Instance, label: string, color: Color3, onClick: () -> (), props: Payload?): TextButton
 	local button: TextButton = create("TextButton", merged({
 		BackgroundColor3 = color,
-		AutoButtonColor = true,
-		Font = Enum.Font.GothamBold,
+		AutoButtonColor = false,
+		Font = DISPLAY_FONT,
 		Text = label,
 		TextColor3 = Color3.new(1, 1, 1),
-		TextSize = 15,
+		TextStrokeColor3 = COLORS.Stroke,
+		TextStrokeTransparency = 0.2,
+		TextSize = 18,
 		TextWrapped = true,
 		RichText = true,
-		Size = UDim2.fromOffset(160, 40),
+		Size = UDim2.fromOffset(160, 42),
 	}, props or {}), parent)
-	round(button, 8)
+	round(button, 12)
+	create("UIStroke", { Name = "Edge", Color = edgeColor(color), Thickness = 3,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, button)
+	topLit(button, 0.7)
+	local gloss = create("Frame", {
+		Name = "Gloss",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 3),
+		Size = UDim2.new(1, -10, 0.38, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.82,
+		BorderSizePixel = 0,
+		Active = false,
+	}, button)
+	round(gloss, 9)
+	addPressFeedback(button)
 	button.Activated:Connect(function()
 		if button:GetAttribute("Enabled") ~= false then
 			onClick()
@@ -284,20 +418,58 @@ local function newButton(parent: Instance, label: string, color: Color3, onClick
 	return button
 end
 
+-- Window (the shop's layout, shared by every screen): coloured body, darker header strip with a big outlined title
+-- and an optional red X, and a dark inset for the content.
+type Window = { Frame: Frame, Header: Frame, Title: TextLabel, Body: Frame }
+
+local function headerColor(color: Color3): Color3
+	return color:Lerp(Color3.new(0, 0, 0), 0.24)
+end
+
+local function insetColor(color: Color3): Color3
+	return color:Lerp(Color3.fromHex("0d1524"), 0.62)
+end
+
+local function newWindow(parent: Instance, color: Color3, props: Payload, onClose: (() -> ())?): Window
+	local frame = newPanel(parent, merged({ BackgroundColor3 = color }, props))
+	local header: Frame = create("Frame", { Name = "Header", Size = UDim2.new(1, 0, 0, 64),
+		BackgroundColor3 = headerColor(color) }, frame)
+	round(header, 14)
+	topLit(header, 0.8)
+	local title = newLabel(header, { Position = UDim2.fromOffset(20, 0),
+		Size = UDim2.new(1, if onClose then -96 else -40, 1, 0), Font = DISPLAY_FONT, TextSize = 32,
+		TextStrokeTransparency = 0, TextTruncate = Enum.TextTruncate.AtEnd })
+	if onClose then
+		newButton(header, "X", COLORS.Bad, onClose, { AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -10, 0.5, 0), Size = UDim2.fromOffset(48, 48), TextSize = 28 })
+	end
+	local body: Frame = create("Frame", { Name = "Body", Position = UDim2.fromOffset(14, 76),
+		Size = UDim2.new(1, -28, 1, -90), BackgroundTransparency = 1 }, frame)
+	return { Frame = frame, Header = header, Title = title, Body = body }
+end
+
+local function setWindowColor(window: Window, color: Color3)
+	window.Frame.BackgroundColor3 = color
+	window.Header.BackgroundColor3 = headerColor(color)
+end
+
 local function newBar(parent: Instance, color: Color3, order: number): Bar
 	local back: Frame = create("Frame", {
-		Size = UDim2.new(1, 0, 0, 16),
-		BackgroundColor3 = Color3.fromRGB(10, 8, 18),
+		Size = UDim2.new(1, 0, 0, 20),
+		BackgroundColor3 = Color3.fromRGB(14, 10, 30),
 		LayoutOrder = order,
 	}, parent)
-	round(back, 5)
+	round(back, 8)
+	outline(back, COLORS.Stroke, 2)
 	local fill: Frame = create("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = color }, back)
-	round(fill, 5)
+	round(fill, 8)
+	topLit(fill, 0.6)
 	local label = newLabel(back, {
 		Size = UDim2.fromScale(1, 1),
 		TextXAlignment = Enum.TextXAlignment.Center,
-		Font = Enum.Font.GothamBold,
-		TextSize = 12,
+		Font = DISPLAY_FONT,
+		TextSize = 14,
+		TextStrokeTransparency = 0.1,
 		ZIndex = 2,
 	})
 	return { Fill = fill, Label = label }
@@ -423,16 +595,17 @@ local function toast(message: string, color: Color3?)
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = COLORS.Panel,
 		BackgroundTransparency = 0.15,
-		Font = Enum.Font.GothamBold,
+		Font = DISPLAY_FONT,
 		TextSize = 15,
 		TextWrapped = true,
 		TextXAlignment = Enum.TextXAlignment.Center,
 		Text = message,
 		LayoutOrder = toastOrder,
 	})
-	round(label, 8)
-	pad(label, 7)
-	outline(label, color or COLORS.Stroke, 1.5)
+	round(label, 12)
+	pad(label, 9)
+	outline(label, color or COLORS.Stroke, 3)
+	topLit(label, 0.72)
 	table.insert(toasts, label)
 	while #toasts > MAX_TOASTS do
 		local oldest = table.remove(toasts, 1)
@@ -559,7 +732,7 @@ local function buildHud()
 		row.VerticalAlignment = Enum.VerticalAlignment.Center
 		newLabel(pill, { Size = UDim2.fromOffset(20, 20), Text = currencyIcon(key), TextSize = 16, LayoutOrder = 1 })
 		currencyLabels[key] = newLabel(pill, { Size = UDim2.fromOffset(0, 20), AutomaticSize = Enum.AutomaticSize.X,
-			Text = "0", Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = info.Color:Lerp(Color3.new(1, 1, 1), 0.45),
+			Text = "0", Font = DISPLAY_FONT, TextSize = 15, TextColor3 = info.Color:Lerp(Color3.new(1, 1, 1), 0.45),
 			LayoutOrder = 2 })
 	end
 
@@ -573,9 +746,9 @@ local function buildHud()
 	bannerObjective = newLabel(banner, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = COLORS.Muted,
 		TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 2 })
 	bannerLoot = newLabel(banner, { Size = UDim2.new(1, 0, 0, 18), TextXAlignment = Enum.TextXAlignment.Center,
-		Font = Enum.Font.GothamBold, LayoutOrder = 3 })
+		Font = DISPLAY_FONT, LayoutOrder = 3 })
 	surgeLabel = newLabel(banner, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = Color3.fromRGB(120, 255, 200),
-		TextXAlignment = Enum.TextXAlignment.Center, Font = Enum.Font.GothamBold, LayoutOrder = 4, Visible = false })
+		TextXAlignment = Enum.TextXAlignment.Center, Font = DISPLAY_FONT, LayoutOrder = 4, Visible = false })
 
 	toastList = create("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 120),
 		Size = UDim2.fromOffset(460, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 },
@@ -585,12 +758,12 @@ local function buildHud()
 
 	abilityLabel = newLabel(gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -14),
 		Size = UDim2.fromOffset(0, 30), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0.15,
-		BackgroundColor3 = COLORS.Panel, Font = Enum.Font.GothamBold, TextSize = 15, Visible = false })
+		BackgroundColor3 = COLORS.Panel, Font = DISPLAY_FONT, TextSize = 15, Visible = false })
 	round(abilityLabel, 8)
 	create("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, abilityLabel)
 
 	comboLabel = newLabel(gui, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -24, 0.42, 0),
-		Size = UDim2.fromOffset(220, 40), TextXAlignment = Enum.TextXAlignment.Right, Font = Enum.Font.GothamBlack,
+		Size = UDim2.fromOffset(220, 40), TextXAlignment = Enum.TextXAlignment.Right, Font = DISPLAY_FONT,
 		TextSize = 30, TextColor3 = COLORS.Gold, TextStrokeTransparency = 0.3, Visible = false })
 
 	refreshRunBanner()
@@ -616,24 +789,23 @@ local function renderOffer()
 	upgradeTitle.Text = if banishMode
 		then ("<font color='#%s'>🚫 Choose a card to BANISH for this run</font>"):format(COLORS.Bad:ToHex())
 		else "⬆️ <b>Choose an Upgrade</b>"
-	upgradeFrame.Size = UDim2.fromOffset(count * CARD_WIDTH + (count - 1) * CARD_GAP + 32, 360)
+	upgradeFrame.Size = UDim2.fromOffset(math.max(420, count * CARD_WIDTH + (count - 1) * CARD_GAP + 44), 450)
 
 	for index, card in offerCards do
 		local style = AssetRegistry.GetRarityStyle(card.Rarity)
+		-- Shop-style card in the rarity colour: striped icon box, outlined text, red edge while banishing.
+		local cardColor = style.Color:Lerp(Color3.new(0, 0, 0), 0.12)
 		local button: TextButton = create("TextButton", {
 			Size = UDim2.new(0, CARD_WIDTH, 1, 0),
-			BackgroundColor3 = COLORS.PanelLight,
-			AutoButtonColor = true,
+			BackgroundColor3 = cardColor,
+			AutoButtonColor = false,
 			Text = "",
 			LayoutOrder = index,
 		}, cardRow)
-		round(button, 10)
-		outline(button, if banishMode then COLORS.Bad else style.Color, 3)
-		create("UIGradient", {
-			Rotation = 90,
-			Color = ColorSequence.new(style.Glow:Lerp(COLORS.PanelLight, 0.35), COLORS.PanelLight),
-			Transparency = NumberSequence.new(0, 0),
-		}, button)
+		round(button, 12)
+		outline(button, if banishMode then COLORS.Bad else COLORS.Stroke, if banishMode then 5 else 3)
+		addPressFeedback(button)
+		topLit(button, 0.7)
 		pad(button, 10)
 		local layout = list(button, Enum.FillDirection.Vertical, 6)
 		layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -642,17 +814,23 @@ local function renderOffer()
 		local maxStacks = tonumber(card.MaxStacks) or 1
 		newLabel(button, { Size = UDim2.new(1, 0, 0, 16), Text = ("[%d]"):format(index), TextColor3 = COLORS.Muted,
 			TextSize = 12, LayoutOrder = 1, Visible = UserInputService.KeyboardEnabled })
-		newLabel(button, { Size = UDim2.new(1, 0, 0, 44), Text = tostring(card.Icon), TextSize = 38,
-			TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 2 })
+		local iconBox: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 84), LayoutOrder = 2,
+			BackgroundColor3 = cardColor:Lerp(Color3.new(1, 1, 1), 0.12) }, button)
+		round(iconBox, 8)
+		create("UIStroke", { Color = edgeColor(cardColor), Thickness = 2.5 }, iconBox)
+		addStripes(iconBox, 8)
+		newLabel(iconBox, { Size = UDim2.fromScale(1, 1), Text = tostring(card.Icon), TextSize = 50,
+			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
 		newLabel(button, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = tostring(card.Name),
-			Font = Enum.Font.GothamBold, TextSize = 17, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
-			LayoutOrder = 3 })
-		newLabel(button, { Size = UDim2.new(1, 0, 0, 16), TextColor3 = style.Color, Font = Enum.Font.GothamBold,
-			TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 4,
+			Font = DISPLAY_FONT, TextSize = 20, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+			TextStrokeTransparency = 0, LayoutOrder = 3 })
+		newLabel(button, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = style.Color:Lerp(Color3.new(1, 1, 1), 0.7),
+			Font = DISPLAY_FONT, TextSize = 15, TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center,
+			LayoutOrder = 4,
 			Text = tostring(card.Rarity):upper() .. (if maxStacks > 1 then ("  ·  %d/%d"):format(stacks, maxStacks) else "") })
 		newLabel(button, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = tostring(card.Desc),
-			TextColor3 = COLORS.Text, TextSize = 13, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
-			LayoutOrder = 5 })
+			TextColor3 = COLORS.Text, TextSize = 15, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+			TextStrokeTransparency = 0.3, LayoutOrder = 5 })
 
 		button.Activated:Connect(function()
 			chooseCard(index)
@@ -693,17 +871,17 @@ end
 
 local function buildUpgradeModal()
 	local gui = newLayer("RiftUpgrade", 20, false)
-	upgradeFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.52),
-		Size = UDim2.fromOffset(600, 360), Visible = false })
-	pad(upgradeFrame, 16)
-	upgradeTitle = newLabel(upgradeFrame, { Size = UDim2.new(1, 0, 0, 24), TextSize = 20,
-		TextXAlignment = Enum.TextXAlignment.Center })
-	cardRow = create("Frame", { Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 1, -86),
-		BackgroundTransparency = 1 }, upgradeFrame)
+	upgradeWindow = newWindow(gui, WINDOW_COLORS.Upgrade, { AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.52), Size = UDim2.fromOffset(600, 450), Visible = false })
+	upgradeFrame = upgradeWindow.Frame
+	upgradeTitle = upgradeWindow.Title
+	upgradeTitle.TextXAlignment = Enum.TextXAlignment.Center
+	cardRow = create("Frame", { Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 1, -66),
+		BackgroundTransparency = 1 }, upgradeWindow.Body)
 	list(cardRow, Enum.FillDirection.Horizontal, CARD_GAP).HorizontalAlignment = Enum.HorizontalAlignment.Center
 
 	local footer: Frame = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
-		Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1 }, upgradeFrame)
+		Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1 }, upgradeWindow.Body)
 	list(footer, Enum.FillDirection.Horizontal, 12).HorizontalAlignment = Enum.HorizontalAlignment.Center
 	rerollButton = newButton(footer, "Reroll", COLORS.Accent, function()
 		sendUpgrade("Reroll", nil)
@@ -759,26 +937,28 @@ end
 local function buildAnchorModal()
 	local gui = newLayer("RiftAnchor", 25, false)
 	anchorFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -60),
-		Size = UDim2.fromOffset(520, 0), AutomaticSize = Enum.AutomaticSize.Y, Visible = false })
+		Size = UDim2.fromOffset(560, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = WINDOW_COLORS.Anchor,
+		Visible = false })
 	pad(anchorFrame, 14)
 	local layout = list(anchorFrame, Enum.FillDirection.Vertical, 8)
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	anchorTitle = newLabel(anchorFrame, { Size = UDim2.new(1, 0, 0, 24), TextSize = 20, TextColor3 = COLORS.Gold,
-		TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 1 })
+	anchorTitle = newLabel(anchorFrame, { Size = UDim2.new(1, 0, 0, 34), Font = DISPLAY_FONT, TextSize = 30,
+		TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 1 })
 	anchorBody = newLabel(anchorFrame, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-		TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 2 })
+		TextWrapped = true, TextSize = 17, TextStrokeTransparency = 0.2, TextXAlignment = Enum.TextXAlignment.Center,
+		LayoutOrder = 2 })
 	anchorTimer = newLabel(anchorFrame, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = COLORS.Muted,
 		TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 3 })
-	anchorButtons = create("Frame", { Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, LayoutOrder = 4 },
+	anchorButtons = create("Frame", { Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, LayoutOrder = 4 },
 		anchorFrame)
 	list(anchorButtons, Enum.FillDirection.Horizontal, 14).HorizontalAlignment = Enum.HorizontalAlignment.Center
 	local extract = newButton(anchorButtons, "🏁 Extract to Town", COLORS.Good, function()
 		sendAnchor("Extract")
-	end, { Size = UDim2.fromOffset(210, 44), LayoutOrder = 1 })
+	end, { Size = UDim2.fromOffset(240, 50), TextSize = 21, LayoutOrder = 1 })
 	extract:SetAttribute("Color", COLORS.Good)
 	local push = newButton(anchorButtons, "⚔️ Push Deeper", COLORS.Accent, function()
 		sendAnchor("Push")
-	end, { Size = UDim2.fromOffset(210, 44), LayoutOrder = 2 })
+	end, { Size = UDim2.fromOffset(240, 50), TextSize = 21, LayoutOrder = 2 })
 	push:SetAttribute("Color", COLORS.Accent)
 end
 
@@ -857,12 +1037,12 @@ local function buildDefeatScreen()
 		Active = true }, defeatGui)
 
 	local panel = newPanel(defeatGui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(620, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 0.02 })
+		Size = UDim2.fromOffset(640, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = WINDOW_COLORS.Defeat })
 	pad(panel, 16)
 	local layout = list(panel, Enum.FillDirection.Vertical, 8)
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	newLabel(panel, { Size = UDim2.new(1, 0, 0, 34), Text = "💀 RIFT COLLAPSE", Font = Enum.Font.GothamBlack,
-		TextSize = 30, TextColor3 = COLORS.Bad, TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 1 })
+	newLabel(panel, { Size = UDim2.new(1, 0, 0, 44), Text = "💀 RIFT COLLAPSE", Font = DISPLAY_FONT,
+		TextSize = 40, TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 1 })
 	defeatTimer = newLabel(panel, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = COLORS.Muted,
 		TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = 2 })
 
@@ -871,11 +1051,11 @@ local function buildDefeatScreen()
 	list(columns, Enum.FillDirection.Horizontal, 10)
 	local function column(order: number, color: Color3): TextLabel
 		local label = newLabel(columns, { Size = UDim2.new(0.5, -5, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-			BackgroundTransparency = 0, BackgroundColor3 = COLORS.PanelLight, TextWrapped = true,
-			TextXAlignment = Enum.TextXAlignment.Center, TextSize = 15, LayoutOrder = order })
-		round(label, 8)
-		pad(label, 8)
-		outline(label, color, 1.5)
+			BackgroundTransparency = 0, BackgroundColor3 = insetColor(WINDOW_COLORS.Defeat), TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Center, TextSize = 16, LayoutOrder = order })
+		round(label, 10)
+		pad(label, 10)
+		outline(label, color, 3)
 		return label
 	end
 	defeatSafe = column(1, COLORS.Good)
@@ -896,15 +1076,15 @@ local function buildDefeatScreen()
 				defeatRemote:FireServer(key)
 			end
 			lockDefeatButtons()
-		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 14, LayoutOrder = index })
+		end, { Size = UDim2.new(1, 0, 0, 46), TextSize = 18, LayoutOrder = index })
 	end
 end
 
 -- Town Hub station panels ----------------------------------------------------------------------------------------
 
 local function section(order: number, label: string): TextLabel
-	return newLabel(stationContent, { Size = UDim2.new(1, 0, 0, 24), Text = label, Font = Enum.Font.GothamBold,
-		TextSize = 16, TextColor3 = COLORS.Gold, LayoutOrder = order })
+	return newLabel(stationContent, { Size = UDim2.new(1, 0, 0, 28), Text = label, Font = DISPLAY_FONT,
+		TextSize = 21, TextColor3 = COLORS.Gold, TextStrokeTransparency = 0.1, LayoutOrder = order })
 end
 
 local function paragraph(order: number, label: string, color: Color3?): TextLabel
@@ -914,15 +1094,18 @@ end
 
 local function itemRow(order: number, title: string, desc: string, buttonText: string, buttonColor: Color3,
 	enabled: boolean, onClick: () -> ()): TextButton
-	local frame: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 64), BackgroundColor3 = COLORS.PanelLight,
+	local frame: Frame = create("Frame", { Size = UDim2.new(1, -6, 0, 72), BackgroundColor3 = COLORS.PanelLight,
 		LayoutOrder = order }, stationContent)
-	round(frame, 8)
-	pad(frame, 8)
-	newLabel(frame, { Size = UDim2.new(1, -160, 0, 20), Text = title, Font = Enum.Font.GothamBold, TextSize = 15 })
-	newLabel(frame, { Position = UDim2.fromOffset(0, 21), Size = UDim2.new(1, -160, 0, 28), Text = desc,
-		TextColor3 = COLORS.Muted, TextSize = 12, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
+	round(frame, 12)
+	outline(frame, COLORS.Stroke, 2.5)
+	topLit(frame, 0.78)
+	pad(frame, 10)
+	newLabel(frame, { Size = UDim2.new(1, -170, 0, 22), Text = title, Font = DISPLAY_FONT, TextSize = 19,
+		TextStrokeTransparency = 0.2 })
+	newLabel(frame, { Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, -170, 0, 28), Text = desc,
+		TextColor3 = COLORS.Muted, TextSize = 14, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
 	local button = newButton(frame, buttonText, buttonColor, onClick, { AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(150, 38), TextSize = 13 })
+		Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(150, 44), TextSize = 18 })
 	setEnabled(button, enabled, buttonColor)
 	return button
 end
@@ -941,6 +1124,7 @@ local function closeStation()
 	stationData = nil
 	respecArmed = false
 	stationFrame.Visible = false
+	shopFrame.Visible = false
 end
 
 local function startRun()
@@ -1010,7 +1194,7 @@ local function renderRiftGate()
 	stepButton("-10", -10, 1)
 	stepButton("-1", -1, 2)
 	newLabel(stepper, { Size = UDim2.fromOffset(250, 36), TextXAlignment = Enum.TextXAlignment.Center,
-		Font = Enum.Font.GothamBold, TextSize = 16, LayoutOrder = 3,
+		Font = DISPLAY_FONT, TextSize = 16, LayoutOrder = 3,
 		Text = ("Tier %d  ·  <font color='#%s'>x%.2f rewards</font>"):format(selectedCorruption, COLORS.Gold:ToHex(),
 			FormulaEngine.GetCorruptionEcoMult(selectedCorruption)) })
 	stepButton("+1", 1, 4)
@@ -1154,53 +1338,32 @@ local function renderSanctum()
 		end, { Size = UDim2.new(1, 0, 0, 40), LayoutOrder = order })
 end
 
-local function renderShrine()
-	local surge = MonetizationConfig.Products.RiftSurge
-	section(1, "🔮 Rift Shrine")
-	paragraph(2, ("Trigger a <b>Server Rift Surge</b> and everyone here earns x%.1f Hunter XP & Rift Dust."):format(
-		MonetizationConfig.RIFT_SURGE_ECO_MULT), COLORS.Muted)
-	local order = 2
-	for _, key in SHRINE_PRODUCTS do
-		local product = MonetizationConfig.Products[key]
-		order += 1
-		itemRow(order, product.Name, SHOP_BLURBS[key] or "", ("R$ %d"):format(product.Price), COLORS.Robux, true, function()
-			requestPurchase("Product", key)
-		end)
-	end
-	order += 1
-	section(order, "Permanent Gamepasses")
-	for _, key in SHRINE_PASSES do
-		local pass = MonetizationConfig.Passes[key]
-		local owned = player:GetAttribute(pass.Attribute) == true
-		order += 1
-		itemRow(order, pass.Name, SHOP_BLURBS[key] or "", if owned then "Owned" else ("R$ %d"):format(pass.Price),
-			COLORS.Robux, not owned, function()
-				requestPurchase("Pass", key)
-			end)
-	end
-	if surge.Id == 0 then
-		order += 1
-		paragraph(order, "Store items go live once their ids are set in MonetizationConfig.", COLORS.Muted)
-	end
-end
-
 local STATION_RENDERERS: { [string]: () -> () } = {
 	RiftGate = renderRiftGate,
 	AscensionPedestal = renderPedestal,
 	SparkSanctum = renderSanctum,
-	RiftShrine = renderShrine,
+	RiftShrine = function()
+		renderShop()
+	end,
 }
 
 local STATION_FETCHES_DATA: { [string]: boolean } = { AscensionPedestal = true, SparkSanctum = true }
 
 renderStation = function()
+	if openStation == "RiftShrine" then
+		renderShop() -- the store has its own window
+		return
+	end
 	local key = openStation
 	local renderer = if key then STATION_RENDERERS[key] else nil
 	if not key or not renderer then
 		return
 	end
 	local look = AssetRegistry.TownStations[key]
-	stationTitle.Text = if look then ("%s  <b>%s</b>"):format(look.Icon, look.Name) else key
+	stationTitle.Text = if look then ("%s %s"):format(look.Icon, look.Name) else key
+	local color = WINDOW_COLORS[key] or WINDOW_COLORS.RiftGate
+	setWindowColor(stationWindow, color)
+	stationContent.BackgroundColor3 = insetColor(color)
 	local scroll = stationContent.CanvasPosition
 	clearGuiChildren(stationContent)
 	renderer()
@@ -1250,6 +1413,13 @@ local function onOpenStation(payload: any)
 		selectedWorld = 1
 	end
 	renderStation()
+	if key == "RiftShrine" then
+		stationFrame.Visible = false
+		shopFrame.Visible = true
+		focusFirstButton(shopGrid)
+		return
+	end
+	shopFrame.Visible = false
 	stationFrame.Visible = true
 	focusFirstButton(stationContent)
 end
@@ -1280,37 +1450,193 @@ local function buildTownMenu()
 	for order, entry in TOWN_MENU do
 		local look = AssetRegistry.TownStations[entry.Station]
 		local color = if look then look.Color else COLORS.Accent
-		local button = newButton(townMenu, "", COLORS.Panel, function()
+		local button = newButton(townMenu, "", color:Lerp(Color3.new(0, 0, 0), 0.15), function()
 			openStationFromMenu(entry.Station)
-		end, { Size = UDim2.fromOffset(76, 76), LayoutOrder = order, BackgroundTransparency = 0.1 })
-		outline(button, color, 2)
-		newLabel(button, { Size = UDim2.new(1, 0, 0, 44), Position = UDim2.fromOffset(0, 6), Text = if look then look.Icon else "?",
-			TextSize = 30, TextXAlignment = Enum.TextXAlignment.Center })
-		newLabel(button, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, -6), Size = UDim2.new(1, 0, 0, 16),
-			Text = entry.Label, Font = Enum.Font.GothamBold, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center })
+		end, { Size = UDim2.fromOffset(78, 78), LayoutOrder = order })
+		newLabel(button, { Size = UDim2.new(1, 0, 0, 46), Position = UDim2.fromOffset(0, 4), Text = if look then look.Icon else "?",
+			TextSize = 34, TextXAlignment = Enum.TextXAlignment.Center })
+		newLabel(button, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, -5), Size = UDim2.new(1, 0, 0, 18),
+			Text = entry.Label, Font = DISPLAY_FONT, TextSize = 17, TextStrokeTransparency = 0,
+			TextXAlignment = Enum.TextXAlignment.Center })
 	end
 end
 
-local function buildStationPanel()
-	local gui = newLayer("RiftStations", 30, false)
-	stationFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.55),
-		Size = UDim2.fromOffset(600, 480), BackgroundTransparency = 0.04, Visible = false })
-	pad(stationFrame, 14)
-	stationTitle = newLabel(stationFrame, { Size = UDim2.new(1, -50, 0, 30), TextSize = 22 })
-	newButton(stationFrame, "✕", COLORS.Bad, closeStation, { AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(36, 30) })
-	stationContent = create("ScrollingFrame", {
-		Position = UDim2.fromOffset(0, 40),
-		Size = UDim2.new(1, 0, 1, -40),
-		BackgroundTransparency = 1,
+-- Rift Shrine store -----------------------------------------------------------------------------------------------
+-- A dedicated shop window: header with wallet pills and close button, category tabs on the left, a hover info bar
+-- and a grid of colour-coded item cards (striped icon box, corner tag, big price button).
+
+local SHOP_TAB_HINTS: { [string]: string } = {
+	Featured = "The most popular boosts and passes. Hover a card to see what it does.",
+	Boosts = "One-time boosts for your next runs, or for the whole server.",
+	Passes = "Permanent upgrades that stay on your account forever.",
+	Rebirth = "Keep your progress when you Rift Rebirth.",
+}
+
+
+local function shopItemInfo(item: ShopItem): (number, boolean, string)
+	if item.Kind == "Pass" then
+		local pass = MonetizationConfig.Passes[item.Key]
+		return pass.Price, player:GetAttribute(pass.Attribute) == true, pass.Name
+	end
+	local product = MonetizationConfig.Products[item.Key]
+	return product.Price, false, product.Name
+end
+
+local function buildShopCard(item: ShopItem, order: number)
+	local price, owned, fullName = shopItemInfo(item)
+	local card: Frame = create("Frame", { BackgroundColor3 = item.Color, LayoutOrder = order }, shopGrid)
+	round(card, 10)
+	outline(card, COLORS.Stroke, 3)
+	topLit(card, 0.72)
+
+	local iconBox: Frame = create("Frame", { Position = UDim2.fromOffset(8, 8), Size = UDim2.new(1, -16, 0, 110),
+		BackgroundColor3 = item.Color:Lerp(Color3.new(1, 1, 1), 0.12) }, card)
+	round(iconBox, 8)
+	create("UIStroke", { Color = edgeColor(item.Color), Thickness = 2.5 }, iconBox)
+	addStripes(iconBox, 8)
+	newLabel(iconBox, { Size = UDim2.fromScale(1, 1), Text = item.Icon, TextSize = 62,
+		TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
+
+	newLabel(card, { Position = UDim2.fromOffset(4, 122), Size = UDim2.new(1, -8, 0, 26), Text = item.Title,
+		Font = DISPLAY_FONT, TextSize = 21, TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center,
+		TextScaled = false })
+
+	local buy = newButton(card, if owned then "Owned" else ("R$ %s"):format(formatNumber(price)), COLORS.Robux, function()
+		requestPurchase(item.Kind, item.Key)
+	end, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -9), Size = UDim2.new(1, -18, 0, 46),
+		TextSize = 22 })
+	setEnabled(buy, not owned, COLORS.Robux)
+
+	if item.Tag then
+		local tag: TextLabel = newLabel(card, { Position = UDim2.fromOffset(-6, -9), Size = UDim2.fromOffset(0, 24),
+			AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0, BackgroundColor3 = edgeColor(item.Color):Lerp(item.Color, 0.35),
+			Text = item.Tag, Font = DISPLAY_FONT, TextSize = 15, TextStrokeTransparency = 0, ZIndex = 3 })
+		create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tag)
+		round(tag, 6)
+		outline(tag, COLORS.Stroke, 2.5)
+	end
+
+	local blurb = ("<b>%s</b>  ·  %s"):format(fullName, SHOP_BLURBS[item.Key] or "")
+	card.MouseEnter:Connect(function()
+		shopInfo.Text = blurb
+	end)
+	buy.SelectionGained:Connect(function()
+		shopInfo.Text = blurb
+	end)
+end
+
+renderShop = function()
+	local data = profile
+	if data then
+		shopWallet.RiftDust.Text = formatNumber(tonumber(data.RiftDust) or 0)
+		shopWallet.RebirthSpark.Text = formatNumber(tonumber(data.RebirthSparksAvailable) or 0)
+	end
+	for name, button in shopTabs do
+		setEnabled(button, true, if name == shopTab then Color3.fromRGB(95, 210, 255) else Color3.fromRGB(84, 92, 140))
+	end
+	shopInfo.Text = SHOP_TAB_HINTS[shopTab] or ""
+	local scroll = shopGrid.CanvasPosition
+	clearGuiChildren(shopGrid)
+	local order = 0
+	for _, item in SHOP_ITEMS do
+		if table.find(item.Tabs, shopTab) then
+			order += 1
+			buildShopCard(item, order)
+		end
+	end
+	shopGrid.CanvasPosition = scroll
+end
+
+local function buildShop()
+	local gui = newLayer("RiftShop", 31, false)
+	shopFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.54),
+		Size = UDim2.fromOffset(900, 610), BackgroundColor3 = WINDOW_COLORS.Shop, Visible = false })
+
+	-- Header: title, wallet pills and the close button.
+	local header: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 72), BackgroundColor3 = headerColor(WINDOW_COLORS.Shop) },
+		shopFrame)
+	round(header, 14)
+	topLit(header, 0.8)
+	newLabel(header, { Position = UDim2.fromOffset(22, 0), Size = UDim2.new(0.5, 0, 1, 0), Text = "🔮 Shop",
+		Font = DISPLAY_FONT, TextSize = 36, TextStrokeTransparency = 0 })
+	local right: Frame = create("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
+		Size = UDim2.fromOffset(0, 52), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1 }, header)
+	local rightLayout = list(right, Enum.FillDirection.Horizontal, 10)
+	rightLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	for order, key in { "RiftDust", "RebirthSpark" } do
+		local pill: Frame = create("Frame", { Size = UDim2.fromOffset(0, 44), AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundColor3 = Color3.fromRGB(70, 80, 125), LayoutOrder = order }, right)
+		round(pill, 10)
+		outline(pill, COLORS.Stroke, 3)
+		topLit(pill, 0.75)
+		create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 12) }, pill)
+		local row = list(pill, Enum.FillDirection.Horizontal, 6)
+		row.VerticalAlignment = Enum.VerticalAlignment.Center
+		newLabel(pill, { Size = UDim2.fromOffset(26, 30), Text = currencyIcon(key), TextSize = 22, LayoutOrder = 1,
+			TextStrokeTransparency = 1 })
+		shopWallet[key] = newLabel(pill, { Size = UDim2.fromOffset(0, 30), AutomaticSize = Enum.AutomaticSize.X, Text = "0",
+			Font = DISPLAY_FONT, TextSize = 22, TextStrokeTransparency = 0, LayoutOrder = 2 })
+	end
+	newButton(right, "X", COLORS.Bad, closeStation, { Size = UDim2.fromOffset(52, 52), TextSize = 30, LayoutOrder = 3 })
+
+	-- Category tabs.
+	local sidebar: Frame = create("Frame", { Position = UDim2.fromOffset(16, 90), Size = UDim2.new(0, 180, 1, -106),
+		BackgroundTransparency = 1 }, shopFrame)
+	list(sidebar, Enum.FillDirection.Vertical, 12)
+	for order, name in SHOP_TABS do
+		shopTabs[name] = newButton(sidebar, name, Color3.fromRGB(84, 92, 140), function()
+			shopTab = name
+			shopGrid.CanvasPosition = Vector2.zero
+			renderShop()
+		end, { Size = UDim2.new(1, 0, 0, 54), TextSize = 22, LayoutOrder = order })
+	end
+
+	-- Hover info bar and the card grid.
+	local infoBar: Frame = create("Frame", { Position = UDim2.fromOffset(212, 90), Size = UDim2.new(1, -228, 0, 48),
+		BackgroundColor3 = Color3.fromRGB(10, 14, 26) }, shopFrame)
+	round(infoBar, 10)
+	outline(infoBar, COLORS.Stroke, 2)
+	shopInfo = newLabel(infoBar, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 1, 0), TextSize = 16,
+		TextColor3 = COLORS.Muted, TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd })
+
+	shopGrid = create("ScrollingFrame", {
+		Position = UDim2.fromOffset(212, 150),
+		Size = UDim2.new(1, -228, 1, -166),
+		BackgroundColor3 = insetColor(WINDOW_COLORS.Shop),
 		BorderSizePixel = 0,
 		CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollBarThickness = 6,
-		ScrollBarImageColor3 = COLORS.Stroke,
-	}, stationFrame)
-	create("UIPadding", { PaddingRight = UDim.new(0, 10) }, stationContent)
-	list(stationContent, Enum.FillDirection.Vertical, 8)
+		ScrollBarImageColor3 = Color3.fromRGB(120, 220, 255),
+	}, shopFrame)
+	round(shopGrid, 12)
+	outline(shopGrid, COLORS.Stroke, 3)
+	create("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 18),
+		PaddingBottom = UDim.new(0, 16) }, shopGrid)
+	create("UIGridLayout", { CellSize = UDim2.fromOffset(148, 214), CellPadding = UDim2.fromOffset(14, 20),
+		SortOrder = Enum.SortOrder.LayoutOrder }, shopGrid)
+end
+
+local function buildStationPanel()
+	local gui = newLayer("RiftStations", 30, false)
+	stationWindow = newWindow(gui, WINDOW_COLORS.RiftGate, { AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.54), Size = UDim2.fromOffset(660, 540), Visible = false }, closeStation)
+	stationFrame = stationWindow.Frame
+	stationTitle = stationWindow.Title
+	stationContent = create("ScrollingFrame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = insetColor(WINDOW_COLORS.RiftGate),
+		BorderSizePixel = 0,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 6,
+		ScrollBarImageColor3 = Color3.new(1, 1, 1),
+	}, stationWindow.Body)
+	round(stationContent, 12)
+	outline(stationContent, COLORS.Stroke, 3)
+	create("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), PaddingTop = UDim.new(0, 12),
+		PaddingBottom = UDim.new(0, 14) }, stationContent)
+	list(stationContent, Enum.FillDirection.Vertical, 10)
 end
 
 -- Server events --------------------------------------------------------------------------------------------------
@@ -1446,6 +1772,7 @@ function UIController.Init()
 	buildAnchorModal()
 	buildDefeatScreen()
 	buildStationPanel()
+	buildShop()
 	buildTownMenu()
 
 	updateScale()

@@ -118,7 +118,14 @@ function AssetRegistry.CreateEnemyModel(enemyKey: string, scale: number?): Model
 
 	local customPrefab = findCustomPrefab("Enemies", enemyKey)
 	if customPrefab then
-		return ModelNormalizer.SanitizeAndNormalize(customPrefab:Clone(), look.Size * s)
+		local model = ModelNormalizer.SanitizeAndNormalize(customPrefab:Clone(), look.Size * s)
+		-- ProceduralAnimController turns enemies by FacingYaw (degrees) so their face points at the camera (+Z).
+		-- Imported glTF/FBX creatures (Quaternius, KayKit) face away from it, so default to 180; set a FacingYaw
+		-- number attribute on a prefab in Assets.Enemies to override.
+		if type(model:GetAttribute("FacingYaw")) ~= "number" then
+			model:SetAttribute("FacingYaw", 180)
+		end
+		return model
 	end
 
 	local model = Instance.new("Model")
