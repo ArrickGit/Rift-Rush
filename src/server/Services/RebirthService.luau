@@ -89,7 +89,7 @@ end
 -- Dust needed to re-activate a weapon that a Standard rebirth switched off (0 for the default weapon).
 function RebirthService.GetReactivationCost(weaponId: string): number
 	local weapon = WeaponConfig.Weapons[weaponId]
-	if not weapon or weaponId == WeaponConfig.DEFAULT_WEAPON then
+	if not weapon or WeaponConfig.IsStarter(weaponId) then
 		return 0
 	end
 	return math.round(weapon.UnlockCost * REACTIVATION_FEE_FRACTION)
@@ -139,7 +139,7 @@ local function applyRebirth(player: Player, profile: PlayerProfileData, mode: Re
 		profile.RiftDust = 0
 		profile.UnlockedWorlds = { [1] = profile.UnlockedWorlds[1] or 0 }
 		for weaponId in profile.UnlockedWeapons do
-			if weaponId ~= WeaponConfig.DEFAULT_WEAPON then
+			if not WeaponConfig.IsStarter(weaponId) then
 				profile.UnlockedWeapons[weaponId] = false
 			end
 		end

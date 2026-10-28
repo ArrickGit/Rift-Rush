@@ -12,8 +12,11 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
+local CurseConfig = require(Shared:WaitForChild("CurseConfig"))
+local LandmarkBuilder = require(Shared:WaitForChild("LandmarkBuilder"))
 local Physics25D = require(Shared:WaitForChild("Physics25D"))
 local RoomAsciiTemplates = require(Shared:WaitForChild("RoomAsciiTemplates"))
+local VistaBuilder = require(Shared:WaitForChild("VistaBuilder"))
 
 type RoomTemplate = RoomAsciiTemplates.RoomTemplate
 type WorldTheme = RoomAsciiTemplates.WorldTheme
@@ -61,6 +64,13 @@ local MEADOW_DEPTH = 220
 -- lets neighbouring runs' meadows meet without overlapping.
 local MEADOW_MARGIN = 136
 local EDGE_WALL_HEIGHT = 200
+
+local TURF_OVERHANG = 0.6 -- elevated turf hangs past its frame on the sides and front (Section 33.4)
+local TURF_THICKNESS = 0.7
+local RIM_COLOR = Color3.fromRGB(255, 226, 160)
+local VINE_COLOR = Color3.fromRGB(58, 140, 52)
+local FLOWER_COLORS = { Color3.fromRGB(255, 120, 190), Color3.fromRGB(255, 236, 110), Color3.fromRGB(255, 255, 255), Color3.fromRGB(190, 140, 255) }
+local STATION_FRONT_Z = -1.5 -- landmark daises stop here so players always walk in front of them
 
 local EXIT_OPEN_COLOR = Color3.fromRGB(80, 235, 255)
 local EXIT_LOCKED_COLOR = Color3.fromRGB(255, 70, 80)
@@ -128,15 +138,66 @@ local function isVisibleGround(grid: { string }, column: number, row: number): b
 	return cellAt(grid, column, row) == "#" and not isBarrier(grid, column, row)
 end
 
+local function decor(parent: Instance, name: string, size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material, shape: Enum.PartType?): Part
+	local part = newPart(parent, name, size, cframe.Position, color, material)
+	part.CFrame = cframe
+	if shape then
+		part.Shape = shape
+	end
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	return part
+end
+
+-- Elevated-platform dressing (Section 33.4): a lime turf cushion overhanging the frame, a bright rim under the front
+-- edge, hanging vines and wildflowers / sprouts along the back so the tier reads instantly against the floor.
+local function dressPlatform(parent: Instance, rng: Random, centerX: number, length: number, top: number, theme: WorldTheme, slabBottom: number)
+	local turf = theme.PlatformTurf :: Color3
+	local frontZ = LANE_Z + TILE.Z / 2
+	decor(parent, "Turf", Vector3.new(length + TURF_OVERHANG * 2, TURF_THICKNESS, TILE.Z + TURF_OVERHANG),
+		CFrame.new(centerX, top - TURF_THICKNESS / 2 + 0.06, LANE_Z + TURF_OVERHANG / 2), turf, Enum.Material.LeafyGrass)
+	local rim = decor(parent, "Rim", Vector3.new(length, 0.18, 0.25), CFrame.new(centerX, slabBottom + 0.09, frontZ + 0.05),
+		RIM_COLOR, Enum.Material.Neon)
+	rim.Transparency = 0.35
+	local x = centerX - length / 2 + 1.5
+	while x < centerX + length / 2 - 1 do
+		local roll = rng:NextNumber()
+		if roll < 0.45 then
+			local vineLength = rng:NextNumber(1.2, 3.4)
+			decor(parent, "Vine", Vector3.new(0.22, vineLength, 0.22), CFrame.new(x, slabBottom - vineLength / 2 + 0.2, frontZ - 0.2),
+				VINE_COLOR, Enum.Material.Grass)
+		end
+		if roll > 0.35 then
+			local z = LANE_Z - TILE.Z / 2 + rng:NextNumber(0.8, 3)
+			if rng:NextNumber() < 0.6 then
+				decor(parent, "Stem", Vector3.new(0.15, 0.9, 0.15), CFrame.new(x, top + 0.45, z), VINE_COLOR, Enum.Material.Grass)
+				decor(parent, "Flower", Vector3.one * 0.6, CFrame.new(x, top + 0.95, z), FLOWER_COLORS[rng:NextInteger(1, #FLOWER_COLORS)],
+					Enum.Material.Neon, Enum.PartType.Ball)
+			else
+				decor(parent, "Sprout", Vector3.new(0.5, 0.7, 0.2), CFrame.new(x, top + 0.3, z) * CFrame.Angles(0, rng:NextNumber(0, 3), 0.4),
+					turf:Lerp(Color3.new(1, 1, 1), 0.15), Enum.Material.LeafyGrass)
+			end
+		end
+		x += rng:NextNumber(2.2, 3.6)
+	end
+end
+
 local function buildTerrain(room: Folder, grid: { string }, origin: Vector3, theme: WorldTheme)
 	local terrain = Instance.new("Folder")
 	terrain.Name = "Terrain"
 	terrain.Parent = room
+	local contrast = theme.PlatformTurf ~= nil and theme.PlatformFrame ~= nil and theme.FloorTurf ~= nil and theme.FloorStone ~= nil
+	local rng = Random.new(math.floor(origin.X) + #grid[1])
 
 	local rows = #grid
 	for row = 1, rows do
 		local rowBottom = origin.Y + (rows - row) * TILE.Y
 		local columns = #grid[row]
+		local isFloor = row == rows
+		local groundColor = if contrast then (if isFloor then theme.FloorStone else theme.PlatformFrame) :: Color3 else theme.Ground
+		local groundMaterial = if contrast and not isFloor then Enum.Material.Sandstone else Enum.Material.Slate
 
 		-- Solid ground, merged per row, with a grass strip on every cell that has open air above it.
 		forEachRun(columns, function(column)
@@ -144,7 +205,7 @@ local function buildTerrain(room: Folder, grid: { string }, origin: Vector3, the
 		end, function(first, length)
 			local centerX = origin.X + (first - 1 + length / 2) * TILE.X
 			newPart(terrain, "Ground", Vector3.new(length * TILE.X, TILE.Y, TILE.Z),
-				Vector3.new(centerX, rowBottom + TILE.Y / 2, LANE_Z), theme.Ground, Enum.Material.Slate)
+				Vector3.new(centerX, rowBottom + TILE.Y / 2, LANE_Z), groundColor, groundMaterial)
 		end)
 		forEachRun(columns, function(column)
 			return isBarrier(grid, column, row)
@@ -161,8 +222,14 @@ local function buildTerrain(room: Folder, grid: { string }, origin: Vector3, the
 			return isVisibleGround(grid, column, row) and not isVisibleGround(grid, column, row - 1)
 		end, function(first, length)
 			local centerX = origin.X + (first - 1 + length / 2) * TILE.X
+			local top = rowBottom + TILE.Y
+			if contrast and not isFloor then
+				dressPlatform(terrain, rng, centerX, length * TILE.X, top, theme, rowBottom)
+				return
+			end
 			local cap = newPart(terrain, "GrassCap", Vector3.new(length * TILE.X, GRASS_THICKNESS, TILE.Z + 0.2),
-				Vector3.new(centerX, rowBottom + TILE.Y - GRASS_THICKNESS / 2 + 0.02, LANE_Z), theme.Cap, Enum.Material.Grass)
+				Vector3.new(centerX, top - GRASS_THICKNESS / 2 + 0.02, LANE_Z), if contrast then theme.FloorTurf :: Color3 else theme.Cap,
+				Enum.Material.Grass)
 			cap.CanCollide = false
 			cap.CanQuery = false
 		end)
@@ -172,9 +239,14 @@ local function buildTerrain(room: Folder, grid: { string }, origin: Vector3, the
 			return cellAt(grid, column, row) == "="
 		end, function(first, length)
 			local centerX = origin.X + (first - 1 + length / 2) * TILE.X
+			local top = rowBottom + TILE.Y
 			local platform = newPart(terrain, "OneWay", Vector3.new(length * TILE.X, PLATFORM_THICKNESS, TILE.Z),
-				Vector3.new(centerX, rowBottom + TILE.Y - PLATFORM_THICKNESS / 2, LANE_Z), theme.Platform, Enum.Material.WoodPlanks)
+				Vector3.new(centerX, top - PLATFORM_THICKNESS / 2, LANE_Z), if contrast then theme.PlatformFrame :: Color3 else theme.Platform,
+				Enum.Material.WoodPlanks)
 			CollectionService:AddTag(platform, Physics25D.ONE_WAY_TAG)
+			if contrast then
+				dressPlatform(terrain, rng, centerX, length * TILE.X, top, theme, top - PLATFORM_THICKNESS)
+			end
 		end)
 	end
 end
@@ -193,9 +265,12 @@ end
 local function buildBackdrop(room: Folder, origin: Vector3, theme: WorldTheme, seed: number, width: number, _height: number)
 	local floorY = origin.Y + TILE.Y
 	local centerX = origin.X + width / 2
+	local stone = theme.FloorStone or theme.Ground
+	local turf = theme.FloorTurf or theme.Cap
 
 	newScenery(room, "Bedrock", Vector3.new(width + 2 * SKIRT_WIDTH, BEDROCK_DEPTH, TILE.Z),
-		Vector3.new(centerX, origin.Y - BEDROCK_DEPTH / 2, LANE_Z), theme.Ground, Enum.Material.Slate)
+		Vector3.new(centerX, origin.Y - BEDROCK_DEPTH / 2, LANE_Z), stone, Enum.Material.Slate)
+	-- The meadow behind the lane is the sunlit cap colour, so the dark floor turf stays a distinct band up front.
 	newScenery(room, "Meadow", Vector3.new(width + 2 * MEADOW_MARGIN, TILE.Y + BEDROCK_DEPTH, MEADOW_DEPTH),
 		Vector3.new(centerX, floorY - (TILE.Y + BEDROCK_DEPTH) / 2, LANE_Z - TILE.Z / 2 - MEADOW_DEPTH / 2),
 		theme.Cap:Lerp(Color3.new(0, 0, 0), 0.12), Enum.Material.Grass).CastShadow = false
@@ -203,9 +278,9 @@ local function buildBackdrop(room: Folder, origin: Vector3, theme: WorldTheme, s
 	for side = -1, 1, 2 do
 		local skirtX = centerX + side * (width / 2 + SKIRT_WIDTH / 2)
 		newScenery(room, "SideGround", Vector3.new(SKIRT_WIDTH, TILE.Y, TILE.Z), Vector3.new(skirtX, origin.Y + TILE.Y / 2, LANE_Z),
-			theme.Ground, Enum.Material.Slate)
+			stone, Enum.Material.Slate)
 		newScenery(room, "SideGrass", Vector3.new(SKIRT_WIDTH, GRASS_THICKNESS, TILE.Z + 0.2),
-			Vector3.new(skirtX, floorY - GRASS_THICKNESS / 2 + 0.02, LANE_Z), theme.Cap, Enum.Material.Grass)
+			Vector3.new(skirtX, floorY - GRASS_THICKNESS / 2 + 0.02, LANE_Z), turf, Enum.Material.Grass)
 
 		local wall = newPart(room, "EdgeWall", Vector3.new(1, EDGE_WALL_HEIGHT, TILE.Z),
 			Vector3.new(centerX + side * (width / 2 + 0.5), floorY + EDGE_WALL_HEIGHT / 2, 0), theme.Ground, Enum.Material.SmoothPlastic)
@@ -275,6 +350,8 @@ local function buildExit(room: Folder, bottom: Vector3): (BasePart, BasePart)
 	light.Range = 18
 	light.Brightness = 2
 	light.Parent = visual
+	AssetRegistry.TagWaypoint(visual, "Exit Portal", "🌀", EXIT_OPEN_COLOR)
+	visual:SetAttribute("WaypointActive", false)
 	return zone, visual
 end
 
@@ -282,10 +359,33 @@ function RoomBuilderService.SetExitOpen(room: BuiltRoom, open: boolean)
 	local color = if open then EXIT_OPEN_COLOR else EXIT_LOCKED_COLOR
 	room.ExitVisual.Color = color
 	room.ExitVisual.Transparency = if open then 0.1 else 0.55
+	room.ExitVisual:SetAttribute("WaypointActive", open) -- the waypoint only points at an open portal
 	local light = room.ExitVisual:FindFirstChildOfClass("PointLight")
 	if light then
 		light.Color = color
 	end
+end
+
+-- Rift Shrine pact altar (a Treasure-room landmark) standing on the floor at `bottom`, behind the lane.
+function RoomBuilderService.CreateCurseAltar(room: BuiltRoom, bottom: Vector3, curse: CurseConfig.CurseInfo): (Model, ProximityPrompt)
+	local accent = Color3.fromRGB(255, 70, 110)
+	local altar, anchor = LandmarkBuilder.BuildPactAltar(curse.Name, curse.Icon, accent)
+	altar:PivotTo(CFrame.new(bottom.X, bottom.Y, STATION_FRONT_Z - 6.5))
+	altar.Parent = room.Folder
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ObjectText = ("%s %s"):format(curse.Icon, curse.Name)
+	prompt.ActionText = ("Accept: %s / %s"):format(curse.Boon, curse.Bane)
+	prompt.HoldDuration = 0.8
+	prompt.MaxActivationDistance = 18
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = anchor
+	return altar, prompt
+end
+
+-- The background fantasy vista for a run (built once into the run's folder) or the town.
+function RoomBuilderService.BuildVista(origin: Vector3, width: number, parent: Instance, seed: number)
+	VistaBuilder.Build(origin, width, parent, seed)
 end
 
 -- Chest with a built-in hold-to-open prompt; the caller connects `Triggered` and destroys/marks the chest.
@@ -321,6 +421,7 @@ function RoomBuilderService.CreateChest(room: BuiltRoom, position: Vector3): (Ba
 	prompt.MaxActivationDistance = 12
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = chest
+	AssetRegistry.TagWaypoint(chest, "Treasure Chest", "🎁", Color3.fromRGB(255, 205, 70))
 	return chest, prompt
 end
 
@@ -381,16 +482,20 @@ function RoomBuilderService.BuildRoom(templateId: string, origin: Vector3, paren
 	local width = COLUMNS * TILE.X
 	local height = ROWS * TILE.Y
 
-	-- Jump Quest poison: a translucent plane that starts inside the floor and creeps upward.
+	-- Jump Quest acid flood (Section 33.5). This invisible marker carries the authoritative surface height in its
+	-- SurfaceY attribute (RunManagerService raises it); every client draws the bubbling 3-layer flood from it.
 	local poison: BasePart? = nil
 	local poisonSpeed = template.RisingPoison or 0
 	if poisonSpeed > 0 then
-		local plane = newPart(folder, "RisingPoison", Vector3.new(width - TILE.X * 2, 4, TILE.Z + 4),
-			Vector3.new(origin.X + width / 2, origin.Y - 2, 0), Color3.fromRGB(120, 255, 90), Enum.Material.Neon)
-		plane.Transparency = 0.45
+		local plane = newPart(folder, "RisingPoison", Vector3.new(width - TILE.X * 2, 1, TILE.Z + 6),
+			Vector3.new(origin.X + width / 2, origin.Y, 0), Color3.fromRGB(115, 255, 45), Enum.Material.SmoothPlastic)
+		plane.Transparency = 1
 		plane.CanCollide = false
 		plane.CanQuery = false
 		plane.CanTouch = false
+		plane:SetAttribute("SurfaceY", origin.Y)
+		plane:SetAttribute("RiseSpeed", poisonSpeed)
+		CollectionService:AddTag(plane, "RiftAcidFlood")
 		poison = plane
 	end
 
@@ -425,14 +530,30 @@ function RoomBuilderService.SetupSky()
 	sky.StarCount = 0
 	sky.Parent = Lighting
 
+	-- Radiant high-fantasy daytime (Section 33.4): low haze so the vista stays crisp, soft sun rays, a touch of bloom.
 	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
-	atmosphere.Density = 0.28
-	atmosphere.Offset = 0.15
+	atmosphere.Density = 0.2
+	atmosphere.Offset = 0.1
 	atmosphere.Color = Color3.fromRGB(190, 222, 255)
-	atmosphere.Decay = Color3.fromRGB(110, 160, 230)
-	atmosphere.Glare = 0.2
-	atmosphere.Haze = 0.8
+	atmosphere.Decay = Color3.fromRGB(120, 175, 240)
+	atmosphere.Glare = 0.15
+	atmosphere.Haze = 0.3
 	atmosphere.Parent = Lighting
+
+	local rays = Lighting:FindFirstChildOfClass("SunRaysEffect") or Instance.new("SunRaysEffect")
+	rays.Intensity = 0.06
+	rays.Spread = 0.6
+	rays.Parent = Lighting
+	local bloom = Lighting:FindFirstChildOfClass("BloomEffect") or Instance.new("BloomEffect")
+	bloom.Intensity = 0.55
+	bloom.Size = 22
+	bloom.Threshold = 1.4
+	bloom.Parent = Lighting
+	local grade = Lighting:FindFirstChildOfClass("ColorCorrectionEffect") or Instance.new("ColorCorrectionEffect")
+	grade.Saturation = 0.12
+	grade.Contrast = 0.04
+	grade.Brightness = 0.02
+	grade.Parent = Lighting
 
 	local clouds = Workspace.Terrain:FindFirstChildOfClass("Clouds") or Instance.new("Clouds")
 	clouds.Cover = 0.45
@@ -441,9 +562,10 @@ function RoomBuilderService.SetupSky()
 	clouds.Parent = Workspace.Terrain
 	Workspace.GlobalWind = Vector3.new(8, 0, 3)
 
-	Lighting.ClockTime = 13.5
+	Lighting.ClockTime = 14.2
+	Lighting.Brightness = 2.6
 	Lighting.GeographicLatitude = 20
-	Lighting.OutdoorAmbient = Color3.fromRGB(150, 160, 180)
+	Lighting.OutdoorAmbient = Color3.fromRGB(135, 165, 210)
 	Lighting.Ambient = Color3.fromRGB(70, 75, 90)
 end
 
@@ -465,6 +587,7 @@ function RoomBuilderService.BuildTownHub(origin: Vector3, parent: Instance): Tow
 	folder.Name = "TownHub"
 	buildTerrain(folder, grid, origin, town.Theme)
 	buildBackdrop(folder, origin, town.Theme, 4242, width, height)
+	VistaBuilder.Build(origin, width, folder, 9001)
 
 	local stationFolder = Instance.new("Folder")
 	stationFolder.Name = "Stations"
@@ -483,7 +606,9 @@ function RoomBuilderService.BuildTownHub(origin: Vector3, parent: Instance): Tow
 				buildJumpPad(folder, bottom)
 			elseif stationKey then
 				local model = AssetRegistry.CreateStationModel(stationKey)
-				model:PivotTo(CFrame.new(bottom + Vector3.new(0, 0, -3)))
+				-- Landmark daises sit with their front edge at STATION_FRONT_Z; the Rift Gate keeps its slim frame.
+				local z = if stationKey == "RiftGate" then -3 else STATION_FRONT_Z - LandmarkBuilder.DAIS_DEPTH / 2
+				model:PivotTo(CFrame.new(bottom.X, bottom.Y, z))
 				model.Parent = stationFolder
 				stations[stationKey] = model
 			end

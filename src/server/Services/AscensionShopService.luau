@@ -12,6 +12,7 @@ local AscensionShopConfig = require(Shared:WaitForChild("AscensionShopConfig"))
 local Physics25D = require(Shared:WaitForChild("Physics25D"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local CharacterService = require(script.Parent:WaitForChild("CharacterService"))
+local InventoryService = require(script.Parent:WaitForChild("InventoryService"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
 local RunManagerService = require(script.Parent:WaitForChild("RunManagerService"))
 
@@ -123,6 +124,7 @@ function AscensionShopService.Respec(player: Player): (boolean, string)
 		data.RebirthSparksAvailable = math.min(data.RebirthSparksTotalEarned, data.RebirthSparksAvailable + refund)
 	end)
 	CharacterService.RefreshMobility(player)
+	InventoryService.TrimLoadout(player) -- Legion Commander / Twin Relic Vessel slots may be gone
 	notify(player, ("Respec complete: %d Rebirth Sparks refunded"):format(refund))
 	return true, "Respecced"
 end

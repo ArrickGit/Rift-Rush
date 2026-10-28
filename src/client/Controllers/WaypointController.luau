@@ -1,159 +1,268 @@
 --!strict
 -- StarterPlayerScripts/Client/Controllers/WaypointController.luau
--- Off-screen waypoints for the Town Hub stations: when a station is outside the view, a round marker with its
--- AssetRegistry icon sits on the matching screen edge, with an arrow pointing at it and the distance in studs.
--- On-screen stations already show their floating name label, so their marker hides. Nothing shows during a run.
+-- Persistent, always-pointing waypoints (game.md Section 33.3) for every interactable tagged "RiftWaypoint"
+-- (AssetRegistry.TagWaypoint: Town Hub stations, chests, pact altars, the open exit portal). They never hide:
+--   * Near (<= NEAR_DISTANCE studs) or on screen: a bobbing downward chevron hovers over the interactable's apex
+--     (InteractableTop + 4.5 + sin(t * 3.5) * 1.1) with its floating name badge; far ones also show the distance.
+--   * Off screen: a round marker with the icon on the matching screen edge, an arrow pointing at it, plus the name
+--     and distance, spread apart so markers never overlap.
+-- Waypoints whose WaypointActive attribute is false (a locked exit) and anything farther than MAX_DISTANCE (the
+-- town while you are in a run, and vice versa) are skipped.
 
+local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
-local Shared = ReplicatedStorage:WaitForChild("Shared")
-local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
-
 type Marker = {
-	Model: Model,
-	Frame: Frame,
+	Target: Instance,
+	Adornee: BasePart,
+	TopOffset: number, -- apex height above the adornee's position
+	Edge: Frame,
 	Pivot: Frame,
-	Distance: TextLabel,
+	EdgeDistance: TextLabel,
+	Hover: BillboardGui,
+	HoverName: TextLabel,
+	Chevron: TextLabel,
+	Phase: number,
 }
 
 type Placed = { Marker: Marker, Position: Vector2 }
 
 local WaypointController = {}
 
+local TAG = "RiftWaypoint"
+local NEAR_DISTANCE = 30
+local MAX_DISTANCE = 240
 local MARKER_SIZE = 46
-local MARKER_SPACING = MARKER_SIZE + 22 -- room for the distance label under each marker
-local EDGE_MARGIN = 40 -- keeps markers (and their arrows) clear of the screen edge
+local MARKER_SPACING = MARKER_SIZE + 34 -- room for the name and distance under each marker
+local EDGE_MARGIN = 44
 local TOP_MARGIN = 70 -- below the Roblox top bar and the HUD's status panel
 -- UIController's town side menu (left) and wallet chips (right), in its 1280x720 design pixels; markers stay inside.
 local LEFT_RESERVED = 130
 local RIGHT_RESERVED = 175
 local REF_WIDTH, REF_HEIGHT = 1280, 720
 local MIN_SCALE, MAX_SCALE = 0.55, 1.25 -- the same clamp UIController uses
-local TARGET_LIFT = Vector3.new(0, 4, 0) -- aim at the station's middle rather than its floor pivot
+local HOVER_LIFT = 4.5
+local BOB_SPEED = 3.5
+local BOB_HEIGHT = 1.1
+-- Hero landmarks are taller than the side-on camera's frame; the hover never rises above this fraction of the
+-- half-height above the view centre (it stays clear of the top HUD banner and keeps pointing down at the station).
+local HOVER_VIEW_LIMIT = 0.6
 
 local player = Players.LocalPlayer
 local gui: ScreenGui
-local markers: { Marker } = {}
+local markers: { [Instance]: Marker } = {}
 
-local function createMarker(model: Model)
-	local look = AssetRegistry.TownStations[model.Name]
-	if not look then
+local function attribute<T>(instance: Instance, name: string, default: T): T
+	local value = instance:GetAttribute(name)
+	return if value ~= nil then value :: any else default
+end
+
+local function findAdornee(target: Instance): BasePart?
+	if target:IsA("BasePart") then
+		return target
+	elseif target:IsA("Model") then
+		return target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart", true)
+	end
+	return nil
+end
+
+local function apexOffset(target: Instance, adornee: BasePart): number
+	if target:IsA("Model") then
+		local cf, size = target:GetBoundingBox()
+		return cf.Y + size.Y / 2 - adornee.Position.Y
+	end
+	return adornee.Size.Y / 2
+end
+
+local function label(parent: Instance, props: { [string]: any }): TextLabel
+	local text = Instance.new("TextLabel")
+	text.BackgroundTransparency = 1
+	text.Font = Enum.Font.FredokaOne
+	text.TextColor3 = Color3.new(1, 1, 1)
+	text.TextStrokeColor3 = Color3.fromRGB(13, 21, 36)
+	text.TextStrokeTransparency = 0.2
+	for key, value in props do
+		(text :: any)[key] = value
+	end
+	text.Parent = parent
+	return text
+end
+
+local function createMarker(target: Instance)
+	if markers[target] then
 		return
 	end
-	local frame = Instance.new("Frame")
-	frame.Name = model.Name
-	frame.AnchorPoint = Vector2.new(0.5, 0.5)
-	frame.Size = UDim2.fromOffset(MARKER_SIZE, MARKER_SIZE)
-	frame.BackgroundColor3 = Color3.fromRGB(22, 20, 36)
-	frame.BackgroundTransparency = 0.15
-	frame.Visible = false
+	local adornee = findAdornee(target)
+	if not adornee then
+		return
+	end
+	local color: Color3 = attribute(target, "WaypointColor", Color3.fromRGB(255, 220, 120))
+	local icon: string = attribute(target, "WaypointIcon", "❗")
+	local name: string = attribute(target, "WaypointName", target.Name)
+
+	-- Off-screen edge marker.
+	local edge = Instance.new("Frame")
+	edge.Name = name
+	edge.AnchorPoint = Vector2.new(0.5, 0.5)
+	edge.Size = UDim2.fromOffset(MARKER_SIZE, MARKER_SIZE)
+	edge.BackgroundColor3 = Color3.fromRGB(22, 20, 36)
+	edge.BackgroundTransparency = 0.15
+	edge.Visible = false
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(1, 0)
-	corner.Parent = frame
+	corner.Parent = edge
 	local stroke = Instance.new("UIStroke")
-	stroke.Color = look.Color
-	stroke.Thickness = 2
-	stroke.Parent = frame
-
-	local icon = Instance.new("TextLabel")
-	icon.BackgroundTransparency = 1
-	icon.Size = UDim2.fromScale(1, 1)
-	icon.Text = look.Icon
-	icon.TextSize = 24
-	icon.Font = Enum.Font.GothamBold
-	icon.Parent = frame
-
-	-- The pivot spins around the marker's centre; its arrow sits just outside the circle.
+	stroke.Color = color
+	stroke.Thickness = 2.5
+	stroke.Parent = edge
+	label(edge, { Size = UDim2.fromScale(1, 1), Text = icon, TextSize = 24, TextStrokeTransparency = 1 })
 	local pivot = Instance.new("Frame")
 	pivot.BackgroundTransparency = 1
 	pivot.AnchorPoint = Vector2.new(0.5, 0.5)
 	pivot.Position = UDim2.fromScale(0.5, 0.5)
 	pivot.Size = UDim2.fromScale(1, 1)
-	pivot.Parent = frame
-	local arrow = Instance.new("TextLabel")
-	arrow.BackgroundTransparency = 1
-	arrow.AnchorPoint = Vector2.new(0, 0.5)
-	arrow.Position = UDim2.new(1, 1, 0.5, 0)
-	arrow.Size = UDim2.fromOffset(16, 16)
-	arrow.Text = "▶"
-	arrow.TextColor3 = look.Color
-	arrow.TextSize = 16
-	arrow.Font = Enum.Font.GothamBold
-	arrow.Parent = pivot
+	pivot.Parent = edge
+	label(pivot, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(1, 1, 0.5, 0), Size = UDim2.fromOffset(16, 16),
+		Text = "▶", TextColor3 = color, TextSize = 18, TextStrokeTransparency = 0.5 })
+	label(edge, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 1, 2), Size = UDim2.fromOffset(150, 15),
+		Text = name, TextSize = 13 })
+	local edgeDistance = label(edge, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 1, 17),
+		Size = UDim2.fromOffset(80, 13), TextSize = 12, TextColor3 = Color3.fromRGB(220, 226, 240) })
+	edge.Parent = gui
 
-	local distance = Instance.new("TextLabel")
-	distance.BackgroundTransparency = 1
-	distance.AnchorPoint = Vector2.new(0.5, 0)
-	distance.Position = UDim2.new(0.5, 0, 1, 2)
-	distance.Size = UDim2.fromOffset(80, 14)
-	distance.Font = Enum.Font.GothamBold
-	distance.TextSize = 12
-	distance.TextColor3 = Color3.fromRGB(238, 236, 248)
-	distance.TextStrokeTransparency = 0.4
-	distance.Parent = frame
+	-- World-space hover: name badge with a bobbing chevron pointing straight down at the interactable.
+	local hover = Instance.new("BillboardGui")
+	hover.Name = name .. "Hover"
+	hover.Adornee = adornee
+	hover.AlwaysOnTop = true
+	hover.LightInfluence = 0
+	hover.Size = UDim2.fromOffset(220, 92)
+	hover.SizeOffset = Vector2.new(0, 0.5) -- the chevron's tip sits on the anchor point
+	hover.MaxDistance = MAX_DISTANCE
+	hover.Enabled = false
+	local badge = Instance.new("Frame")
+	badge.AnchorPoint = Vector2.new(0.5, 0)
+	badge.Position = UDim2.fromScale(0.5, 0)
+	badge.Size = UDim2.fromOffset(0, 30)
+	badge.AutomaticSize = Enum.AutomaticSize.X
+	badge.BackgroundColor3 = Color3.fromRGB(22, 20, 36)
+	badge.BackgroundTransparency = 0.2
+	badge.Parent = hover
+	local badgeCorner = Instance.new("UICorner")
+	badgeCorner.CornerRadius = UDim.new(0, 10)
+	badgeCorner.Parent = badge
+	local badgeStroke = Instance.new("UIStroke")
+	badgeStroke.Color = color
+	badgeStroke.Thickness = 2
+	badgeStroke.Parent = badge
+	local padding = Instance.new("UIPadding")
+	padding.PaddingLeft = UDim.new(0, 10)
+	padding.PaddingRight = UDim.new(0, 10)
+	padding.Parent = badge
+	local hoverName = label(badge, { Size = UDim2.fromScale(0, 1), AutomaticSize = Enum.AutomaticSize.X, Text = icon .. " " .. name,
+		TextSize = 18 })
+	local chevron = label(hover, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.fromScale(0.5, 1), Size = UDim2.fromOffset(60, 56),
+		Text = "▼", TextColor3 = color, TextSize = 52, TextStrokeTransparency = 0 })
+	hover.Parent = gui
 
-	frame.Parent = gui
-	table.insert(markers, { Model = model, Frame = frame, Pivot = pivot, Distance = distance })
+	markers[target] = {
+		Target = target, Adornee = adornee, TopOffset = apexOffset(target, adornee), Edge = edge, Pivot = pivot,
+		EdgeDistance = edgeDistance, Hover = hover, HoverName = hoverName, Chevron = chevron, Phase = math.random() * 6,
+	}
+end
+
+local function removeMarker(target: Instance)
+	local marker = markers[target]
+	if marker then
+		marker.Edge:Destroy()
+		marker.Hover:Destroy()
+		markers[target] = nil
+	end
+end
+
+local function hide(marker: Marker)
+	marker.Edge.Visible = false
+	marker.Hover.Enabled = false
 end
 
 local function update()
 	local camera = Workspace.CurrentCamera
-	local inTown = player:GetAttribute("RunId") == nil
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if not camera or not inTown or not (root and root:IsA("BasePart")) then
+	if not camera or not (root and root:IsA("BasePart")) then
 		for _, marker in markers do
-			marker.Frame.Visible = false
+			hide(marker)
 		end
 		return
 	end
 
+	local now = os.clock()
 	local viewport = camera.ViewportSize
 	local uiScale = math.clamp(math.min(viewport.X / REF_WIDTH, viewport.Y / REF_HEIGHT), MIN_SCALE, MAX_SCALE)
-	local minX, maxX = EDGE_MARGIN + LEFT_RESERVED * uiScale, viewport.X - EDGE_MARGIN - RIGHT_RESERVED * uiScale
-	local minY, maxY = TOP_MARGIN, viewport.Y - EDGE_MARGIN
+	local inRun = player:GetAttribute("RunId") ~= nil
+	local minX = EDGE_MARGIN + (if inRun then 0 else LEFT_RESERVED * uiScale)
+	local maxX = viewport.X - EDGE_MARGIN - RIGHT_RESERVED * uiScale
+	local minY, maxY = TOP_MARGIN, viewport.Y - EDGE_MARGIN - 20
 	local halfX, halfY = (maxX - minX) / 2, (maxY - minY) / 2
 	local boxCenter = Vector2.new((minX + maxX) / 2, (minY + maxY) / 2)
 	local edges: { [string]: { Placed } } = { Left = {}, Right = {}, Top = {}, Bottom = {} }
 
-	for _, marker in markers do
-		if not marker.Model.Parent then
-			marker.Frame.Visible = false
+	for target, marker in markers do
+		if target.Parent == nil or marker.Adornee.Parent == nil then
+			removeMarker(target)
 			continue
 		end
-		local target = marker.Model:GetPivot().Position + TARGET_LIFT
-		-- The second return of WorldToViewportPoint is "on screen", not "in front"; Z is the depth along the view.
-		local point = camera:WorldToViewportPoint(target)
-		local inFront = point.Z > 0
-		local screen = Vector2.new(point.X, point.Y)
-		if inFront and screen.X >= minX and screen.X <= maxX and screen.Y >= minY and screen.Y <= maxY then
-			marker.Frame.Visible = false
+		local apex = marker.Adornee.Position + Vector3.new(0, marker.TopOffset, 0)
+		local distance = (apex - root.Position).Magnitude
+		if target:GetAttribute("WaypointActive") == false or distance > MAX_DISTANCE then
+			hide(marker)
 			continue
 		end
 
+		local point = camera:WorldToViewportPoint(apex)
+		local inFront = point.Z > 0
+		local screen = Vector2.new(point.X, point.Y)
+		local onScreen = inFront and screen.X >= minX and screen.X <= maxX and screen.Y >= minY and screen.Y <= maxY
+		local near = distance <= NEAR_DISTANCE
+
+		if near or onScreen then
+			marker.Edge.Visible = false
+			marker.Hover.Enabled = true
+			local lift = HOVER_LIFT + math.sin(now * BOB_SPEED + marker.Phase) * BOB_HEIGHT
+			local depth = math.max(1, (marker.Adornee.Position - camera.CFrame.Position):Dot(camera.CFrame.LookVector))
+			local viewTop = camera.CFrame.Position.Y + math.tan(math.rad(camera.FieldOfView / 2)) * depth * HOVER_VIEW_LIMIT
+			local height = math.min(marker.TopOffset + lift, viewTop - marker.Adornee.Position.Y + math.sin(now * BOB_SPEED + marker.Phase) * BOB_HEIGHT)
+			marker.Hover.StudsOffsetWorldSpace = Vector3.new(0, height, 0)
+			local name: string = attribute(target, "WaypointName", target.Name)
+			local icon: string = attribute(target, "WaypointIcon", "❗")
+			marker.HoverName.Text = if near then ("%s %s"):format(icon, name) else ("%s %s  <font color='#cfdaf0'>%dm</font>"):format(icon, name, math.round(distance))
+			marker.HoverName.RichText = true
+			local pulse = if near then 1 + 0.08 * math.sin(now * 6) else 0.8
+			marker.Chevron.TextSize = 52 * pulse
+			continue
+		end
+
+		marker.Hover.Enabled = false
 		-- Behind the camera the projection mirrors through the centre; flip it so the arrow still points the right way.
 		local direction = if inFront then screen - boxCenter else boxCenter - screen
 		if direction.Magnitude < 1 then
 			direction = Vector2.new(0, -1)
 		end
-		-- Walk from the centre along `direction` until hitting the inset screen rectangle.
 		local scaleX = if direction.X ~= 0 then halfX / math.abs(direction.X) else math.huge
 		local scaleY = if direction.Y ~= 0 then halfY / math.abs(direction.Y) else math.huge
-		local edge = boxCenter + direction * math.min(scaleX, scaleY)
+		local edgePoint = boxCenter + direction * math.min(scaleX, scaleY)
 		local side = if scaleX <= scaleY
 			then (if direction.X < 0 then "Left" else "Right")
 			else (if direction.Y < 0 then "Top" else "Bottom")
-
 		marker.Pivot.Rotation = math.deg(math.atan2(direction.Y, direction.X))
-		marker.Distance.Text = ("%dm"):format(math.round((target - root.Position).Magnitude))
-		marker.Frame.Visible = true
-		table.insert(edges[side], { Marker = marker, Position = edge })
+		marker.EdgeDistance.Text = ("%dm"):format(math.round(distance))
+		marker.Edge.Visible = true
+		table.insert(edges[side], { Marker = marker, Position = edgePoint })
 	end
 
-	-- Markers on the same edge are spread apart along it so their icons and distances never overlap.
+	-- Markers on the same edge are spread apart along it so their icons and labels never overlap.
 	for side, placed in edges do
 		local vertical = side == "Left" or side == "Right"
 		local low, high = if vertical then minY else minX, if vertical then maxY else maxX
@@ -167,7 +276,6 @@ local function update()
 		for index, entry in placed do
 			coords[index] = math.max(along(entry), if index > 1 then coords[index - 1] + MARKER_SPACING else low)
 		end
-		-- If the run spilled past the far end, slide everything back (never above the near end).
 		local overflow = (coords[#coords] or high) - high
 		for index = #coords, 1, -1 do
 			if overflow <= 0 then
@@ -180,7 +288,7 @@ local function update()
 			local position = if vertical
 				then Vector2.new(entry.Position.X, coords[index])
 				else Vector2.new(coords[index], entry.Position.Y)
-			entry.Marker.Frame.Position = UDim2.fromOffset(position.X, position.Y)
+			entry.Marker.Edge.Position = UDim2.fromOffset(position.X, position.Y)
 		end
 	end
 end
@@ -193,18 +301,31 @@ function WaypointController.Init()
 	gui.DisplayOrder = 5
 	gui.Parent = player:WaitForChild("PlayerGui")
 
+	for _, instance in CollectionService:GetTagged(TAG) do
+		createMarker(instance)
+	end
+	CollectionService:GetInstanceAddedSignal(TAG):Connect(function(instance: Instance)
+		-- Models stream their parts in after the tag; give them a moment so the apex is measured on the full model.
+		task.delay(0.2, function()
+			if instance.Parent then
+				createMarker(instance)
+			end
+		end)
+	end)
+	CollectionService:GetInstanceRemovedSignal(TAG):Connect(removeMarker)
+
 	RunService.RenderStepped:Connect(update)
 
-	-- TownHubService builds the hub once at server start.
-	local stations = Workspace:WaitForChild("TownHub"):WaitForChild("Stations")
-	for _, child in stations:GetChildren() do
-		if child:IsA("Model") then
-			createMarker(child)
-		end
-	end
-	stations.ChildAdded:Connect(function(child: Instance)
-		if child:IsA("Model") then
-			createMarker(child)
+	-- Safety net: anything tagged that still has no marker (it replicated before its parts, or the added signal
+	-- raced the join) is picked up here.
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			for _, instance in CollectionService:GetTagged(TAG) do
+				if not markers[instance] and instance:IsDescendantOf(Workspace) then
+					createMarker(instance)
+				end
+			end
 		end
 	end)
 end

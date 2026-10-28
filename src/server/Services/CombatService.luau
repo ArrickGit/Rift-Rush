@@ -5,15 +5,19 @@
 -- cooldowns and kills through FormulaEngine. Everything cosmetic goes back out on CombatFx / DamageNumber.
 --
 -- What lives here:
---   * Basic attacks + the Q ability for Greatsword, Daggers and Staff (WeaponConfig profiles), the weapon passives,
---     dash i-frames, the Rift Combo counter and Burn / Shock status effects.
+--   * Basic attacks + the Q ability for all 8 weapons (WeaponConfig profiles), every weapon passive, dash i-frames,
+--     the Rift Combo counter and Burn / Shock status effects. Q kinds: projectile fans, Arrow Rain, Seismic
+--     Tremor pillars, Rising Uppercut and Spirit Fox summons (server-simulated, firing real projectiles).
+--   * Relic hooks (game.md Section 7) for the run's active relics (RelicService.GetActive) and Rift Shrine curses
+--     (RunManagerService.GetCurseMods): Frost Heart, Treasure Tooth, Thunder Boots, Hungry Coin, Phoenix Feather,
+--     Vampiric Fang, Broken Crown, Volatile Hourglass. Shields (Seismic Impact, Frost Heart) absorb damage first.
 --   * Projectiles for both teams (player bolts / abilities, boss shockwaves / boulders). Spore boulders can be
 --     smacked back with a basic attack to stun the Mushroom Titan.
 --   * Run upgrades: rolling cards on RoomCleared, Pick / Reroll / Banish, and the build's stat totals.
 --   * Player damage, so EnemyAIService can hurt players without knowing about i-frames.
 --
 -- Player attributes this service publishes for the HUD: Combo, AttackInterval, Ability1ReadyAt (server time),
--- Ability1Cooldown. Gamepass attributes it reads (set by MonetizationService in Step 5): HasVIPArchitect (4th card),
+-- Ability1Cooldown, Shield. Gamepass attributes it reads (set by MonetizationService in Step 5): HasVIPArchitect (4th card),
 -- HasBanishPass (+3 Banish charges per run). Reroll Pack charges (profile.BonusRerolls) are spent once the run's
 -- free rerolls are gone.
 
@@ -25,12 +29,14 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local FormulaEngine = require(Shared:WaitForChild("FormulaEngine"))
 local Physics25D = require(Shared:WaitForChild("Physics25D"))
+local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local RoomAsciiTemplates = require(Shared:WaitForChild("RoomAsciiTemplates"))
 local UpgradePoolConfig = require(Shared:WaitForChild("UpgradePoolConfig"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 local EnemyAIService = require(script.Parent:WaitForChild("EnemyAIService"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
+local RelicService = require(script.Parent:WaitForChild("RelicService"))
 local RunManagerService = require(script.Parent:WaitForChild("RunManagerService"))
 
 type PlayerProfileData = PlayerDataService.PlayerProfileData
@@ -59,6 +65,18 @@ type PlayerCombat = {
 	HurtUntil: number,
 	ShadowStepUntil: number,
 	MomentumUntil: number,
+	Shield: number, -- HP absorbed before health (Seismic Impact, Frost Heart)
+	ShieldUntil: number,
+	FocusTarget: EnemyState?, -- Bow: Hurricane Focus target and consecutive-hit count
+	FocusStacks: number,
+	SwingCount: number, -- Gauntlets 3-hit chain
+	DeckCount: number, -- Trick Cards: every 6th attack draws a card
+	BellFocus: EnemyState?, -- Summoning Bell: the target its spirits focus
+	ToothStacks: number, -- Treasure Tooth
+	PhoenixUsed: boolean,
+	FrostReadyAt: number,
+	FangReadyAt: number,
+	OrbitAt: number, -- next Hungry Coin orbit tick
 	Stacks: { [string]: number },
 	Mods: { [string]: number },
 	Banished: { [string]: boolean },
@@ -93,7 +111,19 @@ type Projectile = {
 	CanReflect: boolean, -- a basic-attack bolt that can smack back a boulder
 	Reflectable: boolean,
 	Reflected: boolean,
+	Bounces: number, -- Trick Cards: hops to the nearest other enemy after a hit
+	Focus: boolean, -- Bow: counts toward Hurricane Focus
 	Hit: { [any]: boolean },
+}
+
+type Summon = {
+	Id: number,
+	Owner: Player,
+	RunId: number,
+	Slot: number,
+	ExpiresAt: number,
+	NextFireAt: number,
+	Ability: AbilityProfile,
 }
 
 type Zone = {
@@ -119,6 +149,7 @@ type AttackCtx = {
 	NormalBonus: number,
 	BossBonus: number,
 	ForceCrit: boolean,
+	Relics: { [string]: number }, -- active relic id -> stars
 }
 
 type StrikeFlags = {
@@ -126,6 +157,10 @@ type StrikeFlags = {
 	NoStatus: boolean?,
 	NativeBurn: boolean?,
 	NativeShock: boolean?,
+	Focus: boolean?, -- Bow arrow: Hurricane Focus
+	Slam: boolean?, -- Hammer ground slam: Seismic Impact bonus vs staggered enemies
+	Stagger: number?, -- seconds of vertical stagger on normal / elite enemies
+	Launch: number?, -- upward speed for the stagger hop
 }
 
 type DamageOpts = {
@@ -175,6 +210,31 @@ local ZONE_TICK = 0.5
 local MAX_ZONES_PER_PLAYER = 6
 local ABILITY_MULTI_CAST_MULT = 0.75
 
+local FOCUS_PER_HIT = 0.03
+local FOCUS_MAX_STACKS = 10
+local SLAM_STAGGER_BONUS = 0.40
+local SLAM_SHIELD_FRACTION = 0.05
+local SLAM_SHIELD_SECONDS = 4
+local STAGGER_HOP = 24
+local UPPERCUT_HOP = 58
+local SELF_UPPERCUT_SPEED = 64
+local GAUNTLET_COMBO_STEP = 0.01 -- per 10 combo
+local GAUNTLET_COMBO_MAX = 0.30
+local GAUNTLET_FINISHER_REACH = 1.4
+local DECK_EVERY = 6
+local DECK_RED_MULT = 1.5
+local DECK_RED_RADIUS = 10
+local DECK_BLUE_SECONDS = 2
+local DECK_GOLD_DUST = 15
+local CARD_BOUNCE_RANGE = 14
+local SUMMON_RANGE = 34
+local SUMMON_OFFSETS = { Vector3.new(-2.6, 3.4, 0), Vector3.new(2.6, 3.8, 0), Vector3.new(0, 5, 0) }
+local RAIN_SEEK_RANGE = 28
+local THUNDER_RANGE = 30
+local THUNDER_SPEED = 95
+local ORBIT_TICK = 0.5
+local FROST_SHIELD_SECONDS = 6
+
 local REFLECT_SPEED_MULT = 1.4
 local REFLECT_STUN_SECONDS = 4
 local REFLECT_HP_FRACTION = 0.05
@@ -199,6 +259,8 @@ local rng = Random.new()
 local combat: { [Player]: PlayerCombat } = {}
 local projectiles: { [number]: Projectile } = {}
 local zones: { Zone } = {}
+local summons: { Summon } = {}
+local nextSummonId = 1
 local numberQueue: { [number]: { { [string]: any } } } = {}
 local lastRemoteAt: { [Player]: { [string]: number } } = {}
 local nextProjectileId = 1
@@ -336,6 +398,18 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 		HurtUntil = 0,
 		ShadowStepUntil = 0,
 		MomentumUntil = 0,
+		Shield = 0,
+		ShieldUntil = 0,
+		FocusTarget = nil,
+		FocusStacks = 0,
+		SwingCount = 0,
+		DeckCount = 0,
+		BellFocus = nil,
+		ToothStacks = 0,
+		PhoenixUsed = false,
+		FrostReadyAt = 0,
+		FangReadyAt = 0,
+		OrbitAt = 0,
 		Stacks = {},
 		Mods = {},
 		Banished = {},
@@ -346,6 +420,7 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 		Zones = 0,
 	}
 	player:SetAttribute("Combo", 0)
+	player:SetAttribute("Shield", nil)
 	return pc
 end
 
@@ -427,6 +502,11 @@ local function makeAttackCtx(player: Player): AttackCtx?
 	end
 
 	local mods = pc.Mods
+	local relics = RelicService.GetActive(player)
+	-- Treasure Tooth stacks are an account-side relic bonus (boosted by Relic Resonance in FormulaEngine).
+	local tooth = relics.REL_02
+	params.RelicDmgBonus = if tooth then pc.ToothStacks * RelicConfig.Value("REL_02", tooth).PerStack else 0
+	params.CurseDmgMultiplier = RunManagerService.GetCurseMods(player).DmgMult
 	return {
 		Player = player,
 		PC = pc,
@@ -439,11 +519,31 @@ local function makeAttackCtx(player: Player): AttackCtx?
 		NormalBonus = linkBonus(profile, "NormalEliteDamage"),
 		BossBonus = linkBonus(profile, "BossDamage"),
 		ForceCrit = false,
+		Relics = relics,
 	}
+end
+
+-- Shields never stack: a new one replaces a weaker or expiring one.
+local function grantShield(pc: PlayerCombat, amount: number, seconds: number)
+	local now = os.clock()
+	local current = if now < pc.ShieldUntil then pc.Shield else 0
+	if amount >= current then
+		pc.Shield = math.round(amount)
+		pc.ShieldUntil = now + seconds
+	else
+		pc.ShieldUntil = math.max(pc.ShieldUntil, now + seconds)
+	end
+	pc.Player:SetAttribute("Shield", pc.Shield)
+end
+
+local function maxHealthOf(player: Player): number
+	local humanoid = getHumanoid(player)
+	return if humanoid then humanoid.MaxHealth else 0
 end
 
 local function attackInterval(ctx: AttackCtx): number
 	local speed = 1 + (ctx.Mods.AttackSpeed or 0) + linkBonus(ctx.Profile, "AttackSpeedCooldown")
+		+ RunManagerService.GetCurseMods(ctx.Player).AttackSpeed
 	if os.clock() < ctx.PC.MomentumUntil then
 		speed += MOMENTUM_ATTACK_SPEED
 	end
@@ -472,7 +572,41 @@ local function rollDamage(ctx: AttackCtx, skillMult: number, targetBonus: number
 end
 
 local function targetBonusFor(ctx: AttackCtx, enemy: EnemyState): number
-	return if enemy.Kind == "Boss" then ctx.BossBonus else ctx.NormalBonus
+	local bonus = if enemy.Kind == "Boss" then ctx.BossBonus else ctx.NormalBonus
+	local crown = ctx.Relics.REL_07
+	if crown then
+		local value = RelicConfig.Value("REL_07", crown)
+		if enemy.Kind ~= "Normal" then
+			bonus += value.BossElite
+		end
+		local humanoid = getHumanoid(ctx.Player)
+		if humanoid and humanoid.Health < humanoid.MaxHealth * 0.5 then
+			bonus += value.LowHp
+		end
+	end
+	return bonus
+end
+
+-- Weapon passives that scale a single hit: Hurricane Focus, Seismic Impact and Combo Overdrive.
+local function passiveBonus(ctx: AttackCtx, enemy: EnemyState, flags: StrikeFlags?): number
+	local bonus = 0
+	local pc = ctx.PC
+	if flags and flags.Focus then
+		if pc.FocusTarget == enemy then
+			pc.FocusStacks = math.min(FOCUS_MAX_STACKS + 1, pc.FocusStacks + 1)
+		else
+			pc.FocusTarget = enemy
+			pc.FocusStacks = 1
+		end
+		bonus += FOCUS_PER_HIT * (pc.FocusStacks - 1)
+	end
+	if flags and flags.Slam and EnemyAIService.IsStunned(enemy) then
+		bonus += SLAM_STAGGER_BONUS
+	end
+	if ctx.Weapon.Id == "Gauntlets" then
+		bonus += math.min(GAUNTLET_COMBO_MAX, math.floor(pc.Combo / 10) * GAUNTLET_COMBO_STEP)
+	end
+	return bonus
 end
 
 local killEnemy: (EnemyState, Player?) -> ()
@@ -506,12 +640,14 @@ end
 -- Statuses ----------------------------------------------------------------------------------------------------
 
 local function applyBurn(ctx: AttackCtx, enemy: EnemyState, stacks: number)
+	-- Arcane Flow (Staff Link Skill): +status damage and duration.
+	local flow = 1 + linkBonus(ctx.Profile, "StatusDamageDuration")
 	local perSecond = rollDamage(ctx, BURN_PCT_PER_SECOND, targetBonusFor(ctx, enemy), 0)
-	local dps = perSecond * (1 + BURN_STACK_BONUS * (stacks - 1))
+	local dps = perSecond * (1 + BURN_STACK_BONUS * (stacks - 1)) * flow
 	local now = os.clock()
 	local existing = enemy.Burn
 	enemy.Burn = {
-		Until = now + BURN_SECONDS,
+		Until = now + BURN_SECONDS * flow,
 		Dps = if existing then math.max(existing.Dps, dps) else dps,
 		NextTick = if existing then existing.NextTick else now + BURN_TICK,
 		Source = ctx.Player,
@@ -519,8 +655,8 @@ local function applyBurn(ctx: AttackCtx, enemy: EnemyState, stacks: number)
 	enemy.Model:SetAttribute("Burning", true)
 end
 
-local function applyShock(enemy: EnemyState, source: Player)
-	enemy.Shock = { Until = os.clock() + SHOCK_SECONDS, Source = source }
+local function applyShock(enemy: EnemyState, source: Player, durationMult: number?)
+	enemy.Shock = { Until = os.clock() + SHOCK_SECONDS * (durationMult or 1), Source = source }
 	enemy.Model:SetAttribute("Shocked", true)
 end
 
@@ -577,7 +713,7 @@ local function applyOnHitEffects(ctx: AttackCtx, enemy: EnemyState, primary: num
 		shockStacks = math.max(shockStacks, 1)
 	end
 	if shockStacks > 0 then
-		applyShock(enemy, ctx.Player)
+		applyShock(enemy, ctx.Player, 1 + linkBonus(ctx.Profile, "StatusDamageDuration"))
 	end
 
 	if enemy.Shock and not options.NoChain then
@@ -592,7 +728,8 @@ strikeEnemy = function(ctx: AttackCtx, enemy: EnemyState, skillMult: number, fla
 		return 0
 	end
 	local critRate = if ctx.ForceCrit then 1 else ctx.CritRate
-	local primary, crit, lines = rollDamage(ctx, skillMult, targetBonusFor(ctx, enemy), critRate)
+	local bonus = targetBonusFor(ctx, enemy) + passiveBonus(ctx, enemy, flags)
+	local primary, crit, lines = rollDamage(ctx, skillMult, bonus, critRate)
 	local total = primary
 	for _, line in lines do
 		total += line
@@ -603,6 +740,21 @@ strikeEnemy = function(ctx: AttackCtx, enemy: EnemyState, skillMult: number, fla
 	damageEnemy(enemy, total, ctx.Player, { Crit = crit, Primary = primary, Lines = lines, Dir = dir })
 	bumpCombo(ctx.PC, 1)
 
+	-- Vampiric Fang: crits heal a slice of Max HP.
+	local fang = ctx.Relics.REL_06
+	if crit and fang and os.clock() >= ctx.PC.FangReadyAt then
+		local value = RelicConfig.Value("REL_06", fang)
+		ctx.PC.FangReadyAt = os.clock() + value.Cooldown
+		local humanoid = getHumanoid(ctx.Player)
+		if humanoid and humanoid.Health > 0 then
+			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + humanoid.MaxHealth * value.Heal)
+		end
+	end
+
+	if not enemy.Dead and flags and flags.Stagger and enemy.Kind ~= "Boss" then
+		EnemyAIService.Stun(enemy, flags.Stagger)
+		EnemyAIService.Launch(enemy, flags.Launch or STAGGER_HOP)
+	end
 	if not enemy.Dead and not (flags and flags.NoStatus) then
 		applyOnHitEffects(ctx, enemy, primary, flags)
 	end
@@ -655,8 +807,81 @@ end
 
 -- Player damage -----------------------------------------------------------------------------------------------
 
+-- Phoenix Feather: once per run, a fatal hit heals instead and detonates a fiery blast.
+local function tryPhoenix(player: Player, pc: PlayerCombat, humanoid: Humanoid, root: BasePart, damage: number): boolean
+	local phoenix = RelicService.GetActive(player).REL_05
+	if not phoenix or pc.PhoenixUsed or damage < humanoid.Health then
+		return false
+	end
+	local value = RelicConfig.Value("REL_05", phoenix)
+	pc.PhoenixUsed = true
+	humanoid.Health = math.max(1, humanoid.MaxHealth * value.Heal)
+	pc.InvulnUntil = os.clock() + value.Invuln
+	local center = root.Position
+	fx(pc.RunId, { Kind = "Burst", Pos = center, Radius = value.BlastRadius, Style = "Phoenix", Owner = player.UserId })
+	fx(pc.RunId, { Kind = "Shake", Intensity = 1.2, Duration = 0.5 })
+	notify(player, "🪶 Phoenix Feather! Reborn from the flames.")
+	local ctx = makeAttackCtx(player)
+	if ctx then
+		for _, victim in enemiesInRadius(pc.RunId, center.X, center.Y, value.BlastRadius, nil) do
+			strikeEnemy(ctx, victim, value.BlastMult, { NativeBurn = true, NoChain = true })
+		end
+	end
+	return true
+end
+
+-- Frost Heart: taking damage freezes nearby enemies and raises an HP barrier (own cooldown).
+local function tryFrostHeart(player: Player, pc: PlayerCombat, root: BasePart)
+	local frost = RelicService.GetActive(player).REL_01
+	local now = os.clock()
+	if not frost or now < pc.FrostReadyAt then
+		return
+	end
+	local value = RelicConfig.Value("REL_01", frost)
+	pc.FrostReadyAt = now + value.Cooldown
+	grantShield(pc, maxHealthOf(player) * value.Barrier, FROST_SHIELD_SECONDS)
+	local center = root.Position
+	fx(pc.RunId, { Kind = "Burst", Pos = center, Radius = value.Radius, Style = "Frost", Owner = player.UserId })
+	local ctx = makeAttackCtx(player)
+	for _, victim in enemiesInRadius(pc.RunId, center.X, center.Y, value.Radius, nil) do
+		if victim.Kind ~= "Boss" then
+			EnemyAIService.Stun(victim, value.Freeze)
+		end
+		if ctx then
+			strikeEnemy(ctx, victim, value.Mult, { NoChain = true, NoStatus = true })
+		end
+	end
+end
+
+-- Final damage to a living run player: curse multiplier, shield, Phoenix Feather, then health.
+local function hurt(player: Player, pc: PlayerCombat, humanoid: Humanoid, root: BasePart, amount: number, kind: string): number
+	local now = os.clock()
+	local damage = math.max(1, math.round(amount * RunManagerService.GetCurseMods(player).TakenMult))
+	if pc.Shield > 0 and now < pc.ShieldUntil then
+		local absorbed = math.min(pc.Shield, damage)
+		pc.Shield -= absorbed
+		damage -= absorbed
+		player:SetAttribute("Shield", if pc.Shield > 0 then pc.Shield else nil)
+		if damage <= 0 then
+			queueNumber(pc.RunId, { Pos = root.Position + Vector3.new(0, 3, 0), Amount = absorbed, Crit = false,
+				Kind = "Shield", Owner = player.UserId })
+			return 0
+		end
+	end
+	if not tryPhoenix(player, pc, humanoid, root, damage) then
+		humanoid:TakeDamage(damage)
+	end
+	queueNumber(pc.RunId, {
+		Pos = root.Position + Vector3.new(0, 3, 0), Amount = damage, Crit = false, Kind = kind, Owner = player.UserId,
+	})
+	if humanoid.Health > 0 then
+		tryFrostHeart(player, pc, root)
+	end
+	return damage
+end
+
 -- Hurts a player unless dash i-frames, post-hit i-frames, a Revive ForceField or death protect them.
-local function damagePlayer(player: Player, amount: number, source: string): boolean
+local function damagePlayer(player: Player, amount: number, _source: string): boolean
 	local pc = getPlayerCombat(player)
 	local humanoid = getHumanoid(player)
 	local root = getRoot(player)
@@ -668,13 +893,25 @@ local function damagePlayer(player: Player, amount: number, source: string): boo
 		return false
 	end
 
-	local damage = math.max(1, math.round(amount))
-	humanoid:TakeDamage(damage)
+	hurt(player, pc, humanoid, root, amount, "Hurt")
 	pc.HurtUntil = now + HURT_IFRAMES
 	fxRemote:FireClient(player, { Kind = "Shake", Intensity = 0.5, Duration = 0.25 })
-	queueNumber(pc.RunId, {
-		Pos = root.Position + Vector3.new(0, 3, 0), Amount = damage, Crit = false, Kind = "Hurt", Owner = player.UserId,
-	})
+	return true
+end
+
+-- Environmental hazard damage (HazardService's acid flood): a fraction of Max HP that ignores dash / hit i-frames
+-- (you cannot dash out of lava) but still respects a Revive ForceField, shields and Phoenix Feather.
+local function damageHazard(player: Player, maxHpFraction: number): boolean
+	local pc = getPlayerCombat(player)
+	local humanoid = getHumanoid(player)
+	local root = getRoot(player)
+	if not pc or not humanoid or not root or humanoid.Health <= 0 or not isRunAlive(player, pc.RunId) then
+		return false
+	end
+	if player.Character and player.Character:FindFirstChildOfClass("ForceField") then
+		return false
+	end
+	hurt(player, pc, humanoid, root, humanoid.MaxHealth * maxHpFraction, "Poison")
 	return true
 end
 
@@ -710,6 +947,8 @@ local function newProjectile(fields: { [string]: any }): Projectile
 		CanReflect = fields.CanReflect == true,
 		Reflectable = fields.Reflectable == true,
 		Reflected = false,
+		Bounces = fields.Bounces or 0,
+		Focus = fields.Focus == true,
 		Hit = {},
 	}
 	projectiles[id] = projectile
@@ -829,7 +1068,32 @@ local function onPlayerProjectileHit(projectile: Projectile, enemy: EnemyState):
 	if projectile.ExplodeRadius then
 		explodeProjectile(projectile, ctx)
 	else
-		strikeEnemy(ctx, enemy, projectile.SkillMult, { NativeBurn = projectile.Burn, NativeShock = projectile.Shock })
+		strikeEnemy(ctx, enemy, projectile.SkillMult,
+			{ NativeBurn = projectile.Burn, NativeShock = projectile.Shock, Focus = projectile.Focus })
+	end
+
+	-- Trick Cards: hop to the nearest enemy this card has not hit yet.
+	if projectile.Bounces > 0 then
+		local px, py = projectile.Pos.X, projectile.Pos.Y
+		local best: EnemyState? = nil
+		local bestDistance = CARD_BOUNCE_RANGE
+		for _, other in enemiesInRadius(projectile.RunId, px, py, CARD_BOUNCE_RANGE, nil) do
+			if not projectile.Hit[other] then
+				local distance = (Vector2.new(other.Feet.X, other.Feet.Y + other.Half.Y) - Vector2.new(px, py)).Magnitude
+				if distance <= bestDistance then
+					best, bestDistance = other, distance
+				end
+			end
+		end
+		if best then
+			projectile.Bounces -= 1
+			local aim = Vector3.new(best.Feet.X, best.Feet.Y + best.Half.Y, 0) - Vector3.new(px, py, 0)
+			local speed = projectile.Vel.Magnitude
+			projectile.Vel = if aim.Magnitude > 0.01 then aim.Unit * speed else projectile.Vel
+			projectile.ExpiresAt = os.clock() + bestDistance / math.max(1, speed) + 0.25
+			fx(projectile.RunId, { Kind = "ProjRedirect", Id = projectile.Id, Pos = projectile.Pos, Vel = projectile.Vel })
+			return false
+		end
 	end
 	return not projectile.Pierce
 end
@@ -974,6 +1238,10 @@ local function tickPlayers(dt: number, now: number)
 			pc.Combo = 0
 			player:SetAttribute("Combo", 0)
 		end
+		if pc.Shield > 0 and now >= pc.ShieldUntil then
+			pc.Shield = 0
+			player:SetAttribute("Shield", nil)
+		end
 		local profile = PlayerDataService.Get(player)
 		if profile then
 			local mobility = Physics25D.GetMobility(profile.AscensionNodes[Physics25D.SKYWALKER_NODE_ID] or 0)
@@ -995,15 +1263,33 @@ end
 local function doMeleeAttack(ctx: AttackCtx, profile: AttackProfile, facing: number, root: BasePart)
 	local rx, ry = root.Position.X, root.Position.Y
 	local reach = profile.Range * (1 + (ctx.Mods.RangeMult or 0))
+	local mult = profile.Mult
+	local style = profile.Style
+	-- Gauntlets: every third punch of the chain is a heavier, longer finisher.
+	if profile.ComboFinisher then
+		ctx.PC.SwingCount += 1
+		if ctx.PC.SwingCount % 3 == 0 then
+			mult *= profile.ComboFinisher
+			reach *= GAUNTLET_FINISHER_REACH
+			style = "Finisher"
+		end
+	end
 	local back = profile.Back or 1
 	local minX = if facing > 0 then rx - back else rx - reach
 	local maxX = if facing > 0 then rx + reach else rx + back
 	local cx, hx = (minX + maxX) / 2, (maxX - minX) / 2
 
 	fx(ctx.RunId, {
-		Kind = "Swing", Owner = ctx.Player.UserId, Weapon = ctx.Weapon.Id, Style = profile.Style,
+		Kind = "Swing", Owner = ctx.Player.UserId, Weapon = ctx.Weapon.Id, Style = style,
 		Pos = Vector3.new(rx, ry, 0), Facing = facing, Range = reach, Height = profile.Height,
 	}, ctx.Player)
+	if style == "Finisher" then
+		fx(ctx.RunId, { Kind = "Burst", Pos = Vector3.new(rx + facing * reach * 0.7, ry, 0), Radius = 3.5, Style = "Finisher",
+			Owner = ctx.Player.UserId })
+	end
+	local flags: StrikeFlags? = if profile.Stagger
+		then { Slam = true, Stagger = profile.Stagger, Launch = STAGGER_HOP }
+		else nil
 
 	local hits: { EnemyState } = {}
 	for _, enemy in livingEnemies(ctx.RunId) do
@@ -1019,8 +1305,16 @@ local function doMeleeAttack(ctx: AttackCtx, profile: AttackProfile, facing: num
 	local limit = profile.MaxTargets + (ctx.Mods.ExtraTargets or 0)
 	local struck = 0
 	for index = 1, math.min(limit, #hits) do
-		strikeEnemy(ctx, hits[index], profile.Mult)
+		strikeEnemy(ctx, hits[index], mult, flags)
 		struck += 1
+	end
+	if struck > 0 and profile.Stagger then
+		-- Hammer passive (Seismic Impact): a slam that connects raises a 5% Max HP shield.
+		grantShield(ctx.PC, maxHealthOf(ctx.Player) * SLAM_SHIELD_FRACTION, SLAM_SHIELD_SECONDS)
+		fx(ctx.RunId, { Kind = "Shake", Intensity = 0.35, Duration = 0.15 })
+	end
+	if ctx.Weapon.Id == "SummoningBell" and hits[1] then
+		ctx.PC.BellFocus = hits[1] -- the bell's pulse tells the spirits who to chase
 	end
 
 	-- Smack back any boulders inside the swing.
@@ -1054,10 +1348,288 @@ local function doProjectileAttack(ctx: AttackCtx, profile: AttackProfile, facing
 		CanReflect = true,
 		ForceCrit = ctx.ForceCrit,
 		Shock = ctx.Weapon.Id == "Staff", -- the Staff's arcane bolts Shock; its Fireball Burns
+		Pierce = profile.Pierce == true,
+		Bounces = profile.Bounces,
+		Focus = ctx.Weapon.Id == "Bow",
 	})
 end
 
+-- Trick Cards passive (Loaded Deck): Red = Burn blast, Blue = -2s Q cooldown, Gold = bonus Rift Dust.
+local function drawCard(ctx: AttackCtx, root: BasePart)
+	local roll = rng:NextInteger(1, 3)
+	local card = if roll == 1 then "Red" elseif roll == 2 then "Blue" else "Gold"
+	local center = root.Position
+	fx(ctx.RunId, { Kind = "CardDraw", Card = card, Pos = center + Vector3.new(0, 4.5, 0), Owner = ctx.Player.UserId })
+	if card == "Red" then
+		fx(ctx.RunId, { Kind = "Burst", Pos = center, Radius = DECK_RED_RADIUS, Style = "Cinders", Owner = ctx.Player.UserId })
+		for _, victim in enemiesInRadius(ctx.RunId, center.X, center.Y, DECK_RED_RADIUS, nil) do
+			strikeEnemy(ctx, victim, DECK_RED_MULT, { NativeBurn = true, NoChain = true })
+		end
+	elseif card == "Blue" then
+		local pc = ctx.PC
+		pc.NextAbilityAt = math.max(os.clock(), pc.NextAbilityAt - DECK_BLUE_SECONDS)
+		local readyAt = ctx.Player:GetAttribute("Ability1ReadyAt")
+		if type(readyAt) == "number" then
+			ctx.Player:SetAttribute("Ability1ReadyAt", math.max(Workspace:GetServerTimeNow(), readyAt - DECK_BLUE_SECONDS))
+		end
+	else
+		RunManagerService.AddUnsecured(ctx.Player, { Dust = DECK_GOLD_DUST, BossCores = 0, RelicShards = 0 })
+	end
+end
+
+-- Volatile Hourglass: every Q cast also emits an arcane pulse around the caster.
+local function hourglassPulse(ctx: AttackCtx, root: BasePart)
+	local hourglass = ctx.Relics.REL_08
+	if not hourglass then
+		return
+	end
+	local value = RelicConfig.Value("REL_08", hourglass)
+	local center = root.Position
+	fx(ctx.RunId, { Kind = "Burst", Pos = center, Radius = value.PulseRadius, Style = "Nova", Owner = ctx.Player.UserId })
+	for _, victim in enemiesInRadius(ctx.RunId, center.X, center.Y, value.PulseRadius, nil) do
+		strikeEnemy(ctx, victim, value.PulseMult, { NoChain = true })
+	end
+end
+
+-- Living enemies whose body overlaps an axis-aligned box on the combat plane.
+local function enemiesInBox(runId: number, cx: number, cy: number, hx: number, hy: number): { EnemyState }
+	local list: { EnemyState } = {}
+	for _, enemy in livingEnemies(runId) do
+		local ex, ey, ehx, ehy = EnemyAIService.Box(enemy)
+		if EnemyAIService.Overlap(cx, cy, hx, hy, ex, ey, ehx, ehy) then
+			table.insert(list, enemy)
+		end
+	end
+	return list
+end
+
+-- Bow: Arrow Rain. Seeks the nearest enemy ahead, else lands RainDistance in front.
+local function castRain(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart)
+	local rx, ry = root.Position.X, root.Position.Y
+	local centerX, centerY = rx + facing * (ability.RainDistance or 11), ry
+	local best = RAIN_SEEK_RANGE
+	for _, enemy in livingEnemies(ctx.RunId) do
+		local ahead = (enemy.Feet.X - rx) * facing
+		if ahead > 0 and ahead < best and math.abs(enemy.Feet.Y - ry) < 14 then
+			best = ahead
+			centerX, centerY = enemy.Feet.X, enemy.Feet.Y + enemy.Half.Y
+		end
+	end
+	local width = ability.RainWidth or 12
+	local height = ability.RainHeight or 22
+	local count = ability.Count + (ctx.Mods.AbilityCasts or 0) * 2
+	fx(ctx.RunId, { Kind = "Telegraph", Pos = Vector3.new(centerX, centerY - 1, 0), Size = Vector3.new(width, 0.6, 6),
+		Duration = 0.35, Style = "Arrow" })
+	local runId = ctx.RunId
+	for index = 1, count do
+		task.delay(0.12 + index * 0.045, function()
+			if not RunManagerService.GetRunById(runId) then
+				return
+			end
+			local x = centerX + (rng:NextNumber() - 0.5) * width
+			newProjectile({
+				Team = "Player", RunId = runId, Pos = Vector3.new(x, centerY + height, 0),
+				Vel = Vector3.new(0, -ability.Speed, 0), HalfX = ability.HalfX, HalfY = ability.HalfY,
+				Life = (height + 6) / ability.Speed, Style = ability.Style, Owner = ctx.Player,
+				SkillMult = ability.Mult, ForceCrit = ctx.ForceCrit,
+			})
+		end)
+	end
+end
+
+-- Hammer: Seismic Tremor. Pillars erupt one after another along the facing.
+local function castPillars(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart)
+	local rx = root.Position.X
+	local feetY = root.Position.Y - EnemyAIService.PLAYER_FEET_OFFSET
+	local halfX, halfY = ability.PillarHalfX or 2.6, ability.PillarHalfY or 5
+	local spacing = ability.Spacing or 5.5
+	local count = ability.Count + (ctx.Mods.AbilityCasts or 0)
+	local player, runId = ctx.Player, ctx.RunId
+	fx(runId, { Kind = "Shake", Intensity = 0.7, Duration = 0.3 })
+	for index = 1, count do
+		task.delay((index - 1) * 0.12, function()
+			local live = makeAttackCtx(player)
+			if not live or live.RunId ~= runId then
+				return
+			end
+			local x = rx + facing * (2 + spacing * index - spacing / 2)
+			fx(runId, { Kind = "Pillar", Pos = Vector3.new(x, feetY, 0), HalfX = halfX, Height = halfY * 2, Owner = player.UserId })
+			local struck = false
+			for _, victim in enemiesInBox(runId, x, feetY + halfY, halfX, halfY) do
+				strikeEnemy(live, victim, ability.Mult, { Slam = true, Stagger = ability.StunSeconds or 1.5, Launch = STAGGER_HOP })
+				struck = true
+			end
+			if struck and index == 1 then
+				grantShield(live.PC, maxHealthOf(player) * SLAM_SHIELD_FRACTION, SLAM_SHIELD_SECONDS)
+			end
+		end)
+	end
+end
+
+-- Gauntlets: Rising Uppercut. Hits a tall box ahead, launches enemies and throws the caster skyward.
+local function castUppercut(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart)
+	local rx = root.Position.X
+	local feetY = root.Position.Y - EnemyAIService.PLAYER_FEET_OFFSET
+	local range, height = ability.Range or 6.5, ability.Height or 9
+	local minX = if facing > 0 then rx - 1 else rx - range
+	local maxX = if facing > 0 then rx + range else rx + 1
+	local cx, hx = (minX + maxX) / 2, (maxX - minX) / 2
+	fx(ctx.RunId, { Kind = "Burst", Pos = Vector3.new(cx, feetY + height / 2, 0), Radius = height / 2 + 1, Style = "Dragon",
+		Owner = ctx.Player.UserId })
+	fxRemote:FireClient(ctx.Player, { Kind = "SelfLaunch", Speed = SELF_UPPERCUT_SPEED })
+	for _, victim in enemiesInBox(ctx.RunId, cx, feetY + height / 2, hx, height / 2) do
+		strikeEnemy(ctx, victim, ability.Mult, { NativeBurn = ability.Burn, Stagger = 0.9, Launch = UPPERCUT_HOP })
+	end
+end
+
+local function removeSummons(owner: Player)
+	for index = #summons, 1, -1 do
+		local summon = summons[index]
+		if summon.Owner == owner then
+			table.remove(summons, index)
+			fx(summon.RunId, { Kind = "SummonEnd", Id = summon.Id })
+		end
+	end
+end
+
+-- Summoning Bell: Spirit Foxes that follow the caster and fire bolts on their own.
+local function castSummon(ctx: AttackCtx, ability: AbilityProfile)
+	removeSummons(ctx.Player)
+	local now = os.clock()
+	local count = math.min(#SUMMON_OFFSETS, ability.Count + (ctx.Mods.AbilityCasts or 0))
+	local duration = ability.Duration or 12
+	for slot = 1, count do
+		local summon: Summon = {
+			Id = nextSummonId, Owner = ctx.Player, RunId = ctx.RunId, Slot = slot, ExpiresAt = now + duration,
+			NextFireAt = now + 0.3 + slot * 0.15, Ability = ability,
+		}
+		nextSummonId += 1
+		table.insert(summons, summon)
+		fx(ctx.RunId, { Kind = "Summon", Id = summon.Id, Owner = ctx.Player.UserId, Offset = SUMMON_OFFSETS[slot],
+			Duration = duration, Style = ability.Style })
+	end
+end
+
+local function tickSummons(now: number)
+	for index = #summons, 1, -1 do
+		local summon = summons[index]
+		local pc = combat[summon.Owner]
+		local root = getRoot(summon.Owner)
+		if now >= summon.ExpiresAt or not pc or pc.RunId ~= summon.RunId or not root or not isRunAlive(summon.Owner, summon.RunId) then
+			table.remove(summons, index)
+			fx(summon.RunId, { Kind = "SummonEnd", Id = summon.Id })
+			continue
+		end
+		if now < summon.NextFireAt then
+			continue
+		end
+		local ctx = makeAttackCtx(summon.Owner)
+		if not ctx then
+			continue
+		end
+		-- Soul Pack: spirits fire at the owner's attack speed and roll with the owner's crit / statuses.
+		local speedBonus = 1 + (ctx.Mods.AttackSpeed or 0) + linkBonus(ctx.Profile, "AttackSpeedCooldown")
+			+ RunManagerService.GetCurseMods(summon.Owner).AttackSpeed
+		summon.NextFireAt = now + (summon.Ability.FireInterval or 0.8) / speedBonus
+		local origin = root.Position + SUMMON_OFFSETS[summon.Slot]
+		local target: EnemyState? = nil
+		local focus = pc.BellFocus
+		if focus and not focus.Dead and focus.RunId == summon.RunId
+			and (Vector2.new(focus.Feet.X, focus.Feet.Y) - Vector2.new(origin.X, origin.Y)).Magnitude <= SUMMON_RANGE + 10 then
+			target = focus
+		else
+			local best = SUMMON_RANGE
+			for _, enemy in enemiesInRadius(summon.RunId, origin.X, origin.Y, SUMMON_RANGE, nil) do
+				local distance = (Vector2.new(enemy.Feet.X, enemy.Feet.Y + enemy.Half.Y) - Vector2.new(origin.X, origin.Y)).Magnitude
+				if distance <= best then
+					best, target = distance, enemy
+				end
+			end
+		end
+		if target then
+			local aim = Vector3.new(target.Feet.X, target.Feet.Y + target.Half.Y, 0) - Vector3.new(origin.X, origin.Y, 0)
+			local ability = summon.Ability
+			local distance = math.max(1, aim.Magnitude)
+			newProjectile({
+				Team = "Player", RunId = summon.RunId, Pos = Vector3.new(origin.X, origin.Y, 0), Vel = aim.Unit * ability.Speed,
+				HalfX = ability.HalfX, HalfY = ability.HalfY, Life = math.min(1.2, distance / ability.Speed + 0.2),
+				Style = ability.Style, Owner = summon.Owner, SkillMult = ability.Mult,
+			})
+		end
+	end
+end
+
+-- Hungry Coin: two coins orbit the player and chew through anything they touch.
+local function tickOrbits(now: number)
+	for player, pc in combat do
+		if now < pc.OrbitAt then
+			continue
+		end
+		pc.OrbitAt = now + ORBIT_TICK
+		local coin = RelicService.GetActive(player).REL_04
+		local root = getRoot(player)
+		if not coin or not root or not isRunAlive(player, pc.RunId) then
+			continue
+		end
+		local value = RelicConfig.Value("REL_04", coin)
+		local ctx = makeAttackCtx(player)
+		if not ctx then
+			continue
+		end
+		for _, victim in enemiesInRadius(pc.RunId, root.Position.X, root.Position.Y, value.OrbitRadius, nil) do
+			strikeEnemy(ctx, victim, value.OrbitDps * ORBIT_TICK, { NoChain = true, NoStatus = true })
+		end
+	end
+end
+
+-- Thunder Boots: each dash fires homing bolts at the nearest enemies.
+local function thunderBoots(player: Player, pc: PlayerCombat, root: BasePart)
+	local boots = RelicService.GetActive(player).REL_03
+	if not boots then
+		return
+	end
+	local value = RelicConfig.Value("REL_03", boots)
+	local origin = root.Position
+	local targets = enemiesInRadius(pc.RunId, origin.X, origin.Y, THUNDER_RANGE, nil)
+	if #targets == 0 then
+		return
+	end
+	table.sort(targets, function(a: EnemyState, b: EnemyState)
+		return math.abs(a.Feet.X - origin.X) < math.abs(b.Feet.X - origin.X)
+	end)
+	for index = 1, value.Bolts do
+		local target = targets[(index - 1) % #targets + 1]
+		local aim = Vector3.new(target.Feet.X, target.Feet.Y + target.Half.Y, 0) - Vector3.new(origin.X, origin.Y + 1, 0)
+		if aim.Magnitude < 0.1 then
+			aim = Vector3.xAxis
+		end
+		newProjectile({
+			Team = "Player", RunId = pc.RunId, Pos = Vector3.new(origin.X, origin.Y + 1, 0), Vel = aim.Unit * THUNDER_SPEED,
+			HalfX = 0.9, HalfY = 0.9, Life = math.min(0.6, aim.Magnitude / THUNDER_SPEED + 0.15), Style = "Lightning",
+			Owner = player, SkillMult = value.Mult, Shock = true,
+		})
+	end
+end
+
 local function castAbility(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart)
+	hourglassPulse(ctx, root)
+	local kind = ability.Kind or "Projectile"
+	if kind == "Rain" then
+		castRain(ctx, ability, facing, root)
+		return
+	elseif kind == "Pillars" then
+		castPillars(ctx, ability, facing, root)
+		return
+	elseif kind == "Uppercut" then
+		castUppercut(ctx, ability, facing, root)
+		return
+	elseif kind == "Summon" then
+		castSummon(ctx, ability)
+		return
+	end
+	if ability.DrawCard then
+		drawCard(ctx, root)
+	end
 	local extra = ctx.Mods.AbilityCasts or 0
 	local count = ability.Count + extra
 	local perMult = ability.Mult * (if ability.Count == 1 and extra > 0 then ABILITY_MULTI_CAST_MULT else 1)
@@ -1080,8 +1652,10 @@ local function castAbility(ctx: AttackCtx, ability: AbilityProfile, facing: numb
 			Pierce = ability.Pierce,
 			ExplodeRadius = ability.ExplodeRadius,
 			Burn = ability.Burn == true,
+			Shock = ability.Shock == true,
 			Trail = (ctx.Mods.AbilityTrail or 0) > 0,
 			ForceCrit = ctx.ForceCrit,
+			Bounces = if ctx.Weapon.Id == "TrickCards" then 1 else 0,
 		})
 	end
 end
@@ -1128,6 +1702,12 @@ local function onAttack(player: Player, slot: any, facingInput: any)
 		else
 			doMeleeAttack(ctx, profile, facing, root)
 		end
+		if ctx.Weapon.Id == "TrickCards" then
+			pc.DeckCount += 1
+			if pc.DeckCount % DECK_EVERY == 0 then
+				drawCard(ctx, root)
+			end
+		end
 		publishAttackInterval(ctx)
 	else
 		local ability = ctx.Weapon.Ability
@@ -1135,6 +1715,10 @@ local function onAttack(player: Player, slot: any, facingInput: any)
 			return
 		end
 		local cooldown = ability.Cooldown / (1 + linkBonus(ctx.Profile, "AttackSpeedCooldown"))
+		local hourglass = ctx.Relics.REL_08
+		if hourglass then
+			cooldown *= 1 - RelicConfig.Value("REL_08", hourglass).Cdr
+		end
 		pc.NextAbilityAt = now + cooldown
 		player:SetAttribute("Ability1Cooldown", cooldown)
 		player:SetAttribute("Ability1ReadyAt", Workspace:GetServerTimeNow() + cooldown)
@@ -1163,8 +1747,14 @@ local function onDash(player: Player, directionInput: any)
 	pc.DashCharges -= 1
 	pc.InvulnUntil = os.clock() + DASH_IFRAMES
 
-	-- Daggers passive: dashing *through* an enemy guarantees the next attack crits.
 	local profile = PlayerDataService.Get(player)
+	-- Gauntlets passive (Combo Overdrive): dashing keeps the combo alive.
+	if profile and profile.EquippedWeapon == "Gauntlets" and pc.Combo > 0 then
+		pc.ComboExpiresAt = math.max(pc.ComboExpiresAt, os.clock() + COMBO_WINDOW)
+	end
+	thunderBoots(player, pc, root)
+
+	-- Daggers passive: dashing *through* an enemy guarantees the next attack crits.
 	if profile and profile.EquippedWeapon == "Daggers" then
 		local startX, startY = root.Position.X, root.Position.Y
 		local runId = pc.RunId
@@ -1253,7 +1843,7 @@ local function refreshMaxHealth(pc: PlayerCombat)
 		return
 	end
 	local newMax = FormulaEngine.GetPlayerMaxHP(profile.HunterLevel, profile.LegacyBonusLevels, profile.RebirthTier,
-		nodeLevel(profile, NODE_MIGHT), 1 + (pc.Mods.MaxHPMult or 0))
+		nodeLevel(profile, NODE_MIGHT), 1 + (pc.Mods.MaxHPMult or 0), RunManagerService.GetCurseMods(pc.Player).HpMult)
 	local gained = newMax - humanoid.MaxHealth
 	humanoid.MaxHealth = newMax
 	if gained > 0 then
@@ -1384,6 +1974,7 @@ function CombatService.GetBuild(player: Player): { [string]: number }
 end
 
 CombatService.DamagePlayer = damagePlayer
+CombatService.DamageHazard = damageHazard
 
 function CombatService.Init()
 	Remotes.Init()
@@ -1400,6 +1991,25 @@ function CombatService.Init()
 		end
 		return 1
 	end
+	-- Hungry Coin: +Rift Dust while the relic is active this run.
+	RunManagerService.DustMultProvider = function(player: Player): number
+		local coin = RelicService.GetActive(player).REL_04
+		return if coin then 1 + RelicConfig.Value("REL_04", coin).Dust else 1
+	end
+	-- Treasure Tooth: chests and Rift Anchors stack run-long damage.
+	RunManagerService.LootEvent:Connect(function(player: Player, _kind: string)
+		local tooth = RelicService.GetActive(player).REL_02
+		local pc = getPlayerCombat(player)
+		if not tooth or not pc then
+			return
+		end
+		local value = RelicConfig.Value("REL_02", tooth)
+		if pc.ToothStacks < value.MaxStacks then
+			pc.ToothStacks += 1
+			notify(player, ("🦷 Treasure Tooth x%d: +%d%% damage this run"):format(pc.ToothStacks,
+				math.round(pc.ToothStacks * value.PerStack * 100)))
+		end
+	end)
 
 	EnemyAIService.Init({
 		DamagePlayer = damagePlayer,
@@ -1417,6 +2027,7 @@ function CombatService.Init()
 	Players.PlayerRemoving:Connect(function(player: Player)
 		combat[player] = nil
 		lastRemoteAt[player] = nil
+		removeSummons(player)
 	end)
 
 	local accumulator, statusClock, numberClock = 0, 0, 0
@@ -1434,11 +2045,13 @@ function CombatService.Init()
 				stepProjectile(projectile, step, now)
 			end
 			tickPlayers(step, now)
+			tickSummons(now)
 			statusClock += step
 			if statusClock >= 0.1 then
 				statusClock = 0
 				tickStatuses(now)
 				tickZones(now)
+				tickOrbits(now)
 			end
 			numberClock += step
 			if numberClock >= NUMBER_FLUSH_SECONDS then

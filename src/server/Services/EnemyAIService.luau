@@ -667,6 +667,18 @@ function EnemyAIService.Stun(state: EnemyState, seconds: number)
 	setAIState(state, "Stunned")
 end
 
+-- Vertical stagger (Section 3): pops a normal / elite enemy straight up in place, never sideways off a platform.
+-- Bosses are stagger-immune. Pair with Stun so the enemy does not hop again mid-air.
+function EnemyAIService.Launch(state: EnemyState, upwardSpeed: number)
+	if state.Dead or state.Boss then
+		return
+	end
+	state.VelX = 0
+	state.VelY = math.max(state.VelY, upwardSpeed)
+	state.Airborne = true
+	state.JustLanded = false
+end
+
 local function stepEnemy(state: EnemyState, now: number, dt: number, targets: { Target })
 	if state.Dead or not state.Model.Parent then
 		return

@@ -41,6 +41,19 @@ local function onCharacterAdded(player: Player, character: Model)
 	Physics25D.SetupActor(character, root)
 	CharacterService.RefreshMobility(player)
 
+	-- Falling out of the world destroys the body parts but can leave the Humanoid "alive" forever, so no respawn
+	-- ever happens. Treat a lost root part as a death so the normal defeat / respawn flow takes over.
+	root.AncestryChanged:Connect(function()
+		-- Respawns and leaving players remove the whole character; only a root lost from a live character counts.
+		if root:IsDescendantOf(game) or player.Character ~= character or not character:IsDescendantOf(game) or not player.Parent then
+			return
+		end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.Health > 0 then
+			humanoid.Health = 0
+		end
+	end)
+
 	-- First spawn can beat the profile load; re-apply once it arrives.
 	if not PlayerDataService.Get(player) then
 		PlayerDataService.Wait(player)

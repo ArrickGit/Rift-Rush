@@ -1,11 +1,20 @@
 --!strict
 -- ServerScriptService/Server/Services/PlayerDataService.luau
--- DataStore-backed player profile wrapper (Section 28.2). Swap the storage calls for ProfileStore later
--- without touching callers: everything goes through Get / Wait / Mutate / Save.
+-- DataStore-backed player profile wrapper (Section 28.2) with session locking (game.md Step SP-6). Everything goes
+-- through Get / Wait / Mutate / Save, so callers never touch the DataStore.
+--
+-- Session locking: the stored record is { Data, Lock = { JobId, Time }, Version }. Loading claims the lock with
+-- UpdateAsync; if another live server holds it (refreshed within LOCK_STALE_SECONDS) we wait for it to release,
+-- then take it over. Every save checks the lock is still ours, so two servers can never write the same profile.
+--
+-- Save / loot race: services that hold unsettled rewards (RunManagerService's Unsecured Pouch) register with
+-- BeforeRelease. When a player leaves or the server shuts down those hooks run first, then the final save writes
+-- the settled profile and releases the lock. Saves for one player are serialized, and nothing saves after release.
 --
 -- Studio without "Enable Studio Access to API Services" falls back to an unsaved in-memory profile.
 
 local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -13,6 +22,8 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+
+export type MasteryEntry = { Level: number, XP: number, ParagonRank: number }
 
 export type PlayerProfileData = {
 	HunterLevel: number,
@@ -30,38 +41,60 @@ export type PlayerProfileData = {
 	AnchorTokens: number,
 
 	EquippedWeapon: string,
-	UnlockedWeapons: { [string]: boolean },
-	WeaponMastery: { [string]: { Level: number, XP: number, ParagonRank: number } },
+	UnlockedWeapons: { [string]: boolean }, -- false = owned but switched off by a Standard rebirth
+	WeaponMastery: { [string]: MasteryEntry },
 	ActiveLinkSkills: { string },
 	UnlockedWorlds: { [number]: number }, -- [WorldIndex] = HighestCorruptionTierUnlocked
 	AscensionNodes: { [string]: number }, -- [NodeId] = Level
-	RelicStars: { [string]: { Stars: number, PityCount: number } },
+	RelicStars: { [string]: { Stars: number, PityCount: number } }, -- the permanent Relic Collection
 	EquippedStartingRelics: { string },
 
-	-- Step 5 (monetization / rebirth bookkeeping; not in the Section 28.2 schema)
+	-- Monetization / rebirth bookkeeping
 	KeepEverythingSeals: number, -- 99 R$ single-use "Keep Everything" rebirths
 	SuperchargedTokens: number, -- spent automatically on the next run start
 	BonusRerolls: number, -- banked Reroll Pack charges, used after the run's free rerolls
-	StarForceSafeguards: number, -- consumed by the Star-Forge (later step)
+	StarForceSafeguards: number, -- refund the Relic Shards of a failed Star-Force attempt
 	PendingSkipCredits: { number }, -- paid Instant Rebirth prices waiting for a matching progress tier
 	ProcessedReceipts: { string }, -- recent PurchaseIds, so a retried ProcessReceipt never double-grants
+
+	-- Step SP-6
+	Stats: { [string]: number }, -- lifetime counters (Kills, BossKills, HighestRoom, ...) for quests & leaderboards
+	Quests: { Day: number, Daily: { string }, Progress: { [string]: number }, Claimed: { [string]: boolean } },
 }
 
+type LockInfo = { JobId: string, Time: number, Session: string }
+
 local STORE_NAME = "RiftRushProfiles_v1"
+local RECORD_VERSION = 2
 local AUTOSAVE_INTERVAL = 90
 local MAX_RETRIES = 4
+local LOCK_STALE_SECONDS = 3 * AUTOSAVE_INTERVAL + 60 -- a lock not refreshed for this long belongs to a dead server
+local LOCK_WAIT_ATTEMPTS = 6
+local LOCK_WAIT_SECONDS = 5
 
 local PlayerDataService = {}
 
 local store: DataStore? = nil
+local sessionId = HttpService:GenerateGUID(false) -- unique even in Studio, where every JobId is ""
 local profiles: { [Player]: PlayerProfileData } = {}
 local ephemeral: { [Player]: boolean } = {} -- true when load failed and the profile must NOT be saved
+local saving: { [Player]: boolean } = {}
+local released: { [Player]: boolean } = {}
+local releaseHooks: { (Player, string) -> () } = {}
 local loadedEvent = Instance.new("BindableEvent")
 local profileUpdated: RemoteEvent? = nil
 
 PlayerDataService.ProfileLoaded = loadedEvent.Event :: RBXScriptSignal
 
 local function newDefaultProfile(): PlayerProfileData
+	local unlocked: { [string]: boolean } = {}
+	local mastery: { [string]: MasteryEntry } = {}
+	for _, weaponId in WeaponConfig.Order do
+		if WeaponConfig.IsStarter(weaponId) then
+			unlocked[weaponId] = true
+			mastery[weaponId] = { Level = 1, XP = 0, ParagonRank = 0 }
+		end
+	end
 	return {
 		HunterLevel = 1,
 		HunterXP = 0,
@@ -78,8 +111,8 @@ local function newDefaultProfile(): PlayerProfileData
 		AnchorTokens = 0,
 
 		EquippedWeapon = WeaponConfig.DEFAULT_WEAPON,
-		UnlockedWeapons = { [WeaponConfig.DEFAULT_WEAPON] = true },
-		WeaponMastery = { [WeaponConfig.DEFAULT_WEAPON] = { Level = 1, XP = 0, ParagonRank = 0 } },
+		UnlockedWeapons = unlocked,
+		WeaponMastery = mastery,
 		ActiveLinkSkills = {},
 		UnlockedWorlds = { [1] = 0 },
 		AscensionNodes = {},
@@ -92,6 +125,9 @@ local function newDefaultProfile(): PlayerProfileData
 		StarForceSafeguards = 0,
 		PendingSkipCredits = {},
 		ProcessedReceipts = {},
+
+		Stats = {},
+		Quests = { Day = 0, Daily = {}, Progress = {}, Claimed = {} },
 	}
 end
 
@@ -100,7 +136,8 @@ end
 local DICT_KEYS_NO_RECURSE: { [string]: boolean } = {
 	UnlockedWeapons = true, WeaponMastery = true, ActiveLinkSkills = true, UnlockedWorlds = true,
 	AscensionNodes = true, RelicStars = true, EquippedStartingRelics = true,
-	PendingSkipCredits = true, ProcessedReceipts = true,
+	PendingSkipCredits = true, ProcessedReceipts = true, Stats = true,
+	Daily = true, Progress = true, Claimed = true,
 }
 
 local function reconcile(data: { [any]: any }, defaults: { [any]: any })
@@ -114,9 +151,36 @@ local function reconcile(data: { [any]: any }, defaults: { [any]: any })
 	end
 end
 
--- DataStore cannot hold numeric-keyed sparse tables, so UnlockedWorlds is stored with string keys.
+-- Profiles saved before weapons 2-3 became starters (or before mastery entries were created lazily) catch up here.
+local function migrate(data: PlayerProfileData)
+	for _, weaponId in WeaponConfig.Order do
+		if WeaponConfig.IsStarter(weaponId) then
+			data.UnlockedWeapons[weaponId] = true
+		end
+		if data.UnlockedWeapons[weaponId] ~= nil and not data.WeaponMastery[weaponId] then
+			data.WeaponMastery[weaponId] = { Level = 1, XP = 0, ParagonRank = 0 }
+		end
+	end
+	if not WeaponConfig.Weapons[data.EquippedWeapon] or data.UnlockedWeapons[data.EquippedWeapon] ~= true then
+		data.EquippedWeapon = WeaponConfig.DEFAULT_WEAPON
+	end
+end
+
+local function deepCopy<T>(value: T): T
+	if type(value) ~= "table" then
+		return value
+	end
+	local copy = {}
+	for key, inner in value :: any do
+		copy[key] = deepCopy(inner)
+	end
+	return copy :: any
+end
+
+-- DataStore cannot hold numeric-keyed sparse tables, so UnlockedWorlds is stored with string keys. The snapshot is
+-- a deep copy, so gameplay mutating the live profile while UpdateAsync yields cannot tear the saved record.
 local function encode(data: PlayerProfileData): { [string]: any }
-	local copy = table.clone(data) :: any
+	local copy = deepCopy(data) :: any
 	local worlds: { [string]: number } = {}
 	for index, tier in data.UnlockedWorlds do
 		worlds[tostring(index)] = tier
@@ -138,16 +202,55 @@ local function decode(raw: { [string]: any }): PlayerProfileData
 	end
 	raw.UnlockedWorlds = worlds
 	reconcile(raw, newDefaultProfile() :: any)
-	return raw :: any
+	local data = raw :: any
+	migrate(data)
+	return data
 end
 
 local function keyFor(player: Player): string
 	return "Player_" .. player.UserId
 end
 
+-- Records written before session locking were the bare profile table.
+local function unwrap(record: any): ({ [string]: any }?, LockInfo?)
+	if type(record) ~= "table" then
+		return nil, nil
+	end
+	if record.Version ~= nil and (type(record.Data) == "table" or record.Data == nil) then
+		local lock = record.Lock
+		return record.Data, if type(lock) == "table" then lock :: any else nil
+	end
+	return record, nil
+end
+
+-- A lock held by another live server. Studio sessions (JobId "") never block each other: the previous playtest
+-- is always gone by the time the next one loads.
+local function isForeignLock(lock: LockInfo?): boolean
+	if lock == nil or lock.Session == sessionId then
+		return false
+	end
+	if RunService:IsStudio() and lock.JobId == "" then
+		return false
+	end
+	return os.time() - (tonumber(lock.Time) or 0) < LOCK_STALE_SECONDS
+end
+
+local function ourLock(): LockInfo
+	return { JobId = game.JobId, Time = os.time(), Session = sessionId }
+end
+
 -- Studio without "Enable Studio Access to API Services" fails every call; retrying only delays the profile.
 local function isStudioAccessDenied(err: string): boolean
-	return RunService:IsStudio() and string.find(err, "Studio access to APIs is not allowed", 1, true) ~= nil
+	if not RunService:IsStudio() then
+		return false
+	end
+	-- Roblox has used several wordings for this over time.
+	for _, needle in { "Studio access to APIs is not allowed", "API access is not enabled", "StudioAccessToApisNotAllowed" } do
+		if string.find(err, needle, 1, true) then
+			return true
+		end
+	end
+	return false
 end
 
 local function withRetries<T>(label: string, fn: () -> T): (boolean, T?)
@@ -174,15 +277,50 @@ function PlayerDataService.Replicate(player: Player)
 	end
 end
 
+-- Claims the session lock and returns the stored profile. ok=false means the DataStore failed (use an unsaved
+-- profile); locked=true means another server still holds the lock after waiting.
+local function claimProfile(player: Player): (boolean, { [string]: any }?, boolean)
+	local finalData: { [string]: any }? = nil
+	for attempt = 1, LOCK_WAIT_ATTEMPTS do
+		local locked = false
+		local force = attempt == LOCK_WAIT_ATTEMPTS
+		local ok = withRetries("Load " .. keyFor(player), function()
+			(store :: DataStore):UpdateAsync(keyFor(player), function(old: any)
+				local data, lock = unwrap(old)
+				finalData = data
+				locked = false
+				if isForeignLock(lock) and not force then
+					locked = true
+					return nil -- leave the record alone and wait for the other server
+				end
+				if lock and isForeignLock(lock) then
+					warn(("[PlayerDataService] Taking over %s's session from server %s"):format(player.Name, tostring(lock.JobId)))
+				end
+				return { Version = RECORD_VERSION, Data = data, Lock = ourLock() }
+			end)
+			return true
+		end)
+		if not ok then
+			return false, nil, false
+		end
+		if not locked then
+			return true, finalData, false
+		end
+		if not player.Parent then
+			return true, nil, true
+		end
+		task.wait(LOCK_WAIT_SECONDS)
+	end
+	return true, finalData, true
+end
+
 local function loadProfile(player: Player)
 	local data: PlayerProfileData? = nil
 
 	if store then
-		local ok, raw = withRetries("GetAsync " .. keyFor(player), function()
-			return (store :: DataStore):GetAsync(keyFor(player))
-		end)
+		local ok, raw = claimProfile(player)
 		if ok then
-			data = if type(raw) == "table" then decode(raw :: any) else newDefaultProfile()
+			data = if raw then decode(raw) else newDefaultProfile()
 		end
 	end
 
@@ -202,19 +340,82 @@ local function loadProfile(player: Player)
 	PlayerDataService.Replicate(player)
 end
 
-function PlayerDataService.Save(player: Player): boolean
+-- Writes the profile if this server still owns its session. `release` drops the lock (the player is leaving).
+local function writeProfile(player: Player, release: boolean): boolean
 	local data = profiles[player]
 	if not data or ephemeral[player] or not store then
 		return false
 	end
 	local snapshot = encode(data)
-	local ok = withRetries("SetAsync " .. keyFor(player), function()
-		(store :: DataStore):UpdateAsync(keyFor(player), function()
-			return snapshot
+	local lostLock = false
+	local ok = withRetries("Save " .. keyFor(player), function()
+		(store :: DataStore):UpdateAsync(keyFor(player), function(old: any)
+			local _, lock = unwrap(old)
+			lostLock = false
+			if lock and lock.Session ~= sessionId then
+				lostLock = true
+				return nil
+			end
+			return { Version = RECORD_VERSION, Data = snapshot, Lock = if release then nil else ourLock() }
 		end)
 		return true
 	end)
+	if lostLock then
+		warn(("[PlayerDataService] %s's profile is now owned by another server; this copy will not be saved."):format(player.Name))
+		ephemeral[player] = true
+		if player.Parent and not release then
+			player:Kick("Your Rift Rush profile was opened on another server. Please rejoin.")
+		end
+		return false
+	end
 	return ok
+end
+
+-- Saves are serialized per player; nothing saves after the final release.
+local function saveSerial(player: Player, release: boolean): boolean
+	while saving[player] do
+		task.wait(0.1)
+	end
+	if released[player] then
+		return false
+	end
+	saving[player] = true
+	local ok, result = pcall(writeProfile, player, release)
+	if release then
+		released[player] = true
+	end
+	saving[player] = nil
+	if not ok then
+		warn("[PlayerDataService] save error: " .. tostring(result))
+		return false
+	end
+	return result
+end
+
+function PlayerDataService.Save(player: Player): boolean
+	return saveSerial(player, false)
+end
+
+-- Registers a hook that runs before a profile's final save (reason: "Leaving" | "Shutdown"). Hooks must not yield;
+-- they settle anything still owed to the player (e.g. the run's Unsecured Pouch) through Mutate.
+function PlayerDataService.BeforeRelease(hook: (Player, string) -> ())
+	table.insert(releaseHooks, hook)
+end
+
+local function release(player: Player, reason: string)
+	if not profiles[player] or released[player] then
+		return
+	end
+	for _, hook in releaseHooks do
+		local ok, err = pcall(function(): any
+			hook(player, reason)
+			return nil
+		end)
+		if not ok then
+			warn("[PlayerDataService] release hook failed: " .. tostring(err))
+		end
+	end
+	saveSerial(player, true)
 end
 
 -- True when the profile failed to load (or DataStores are off in Studio) and will never be saved.
@@ -245,6 +446,16 @@ function PlayerDataService.Mutate(player: Player, fn: (PlayerProfileData) -> ())
 	PlayerDataService.Replicate(player)
 end
 
+-- Adds `amount` to a lifetime stat (or raises it to `amount` when `isMax`). Does not replicate.
+function PlayerDataService.BumpStat(player: Player, stat: string, amount: number, isMax: boolean?)
+	local data = profiles[player]
+	if not data then
+		return
+	end
+	local current = data.Stats[stat] or 0
+	data.Stats[stat] = if isMax then math.max(current, amount) else current + amount
+end
+
 function PlayerDataService.Init()
 	Remotes.Init()
 	profileUpdated = Remotes.GetEvent("ProfileUpdated")
@@ -271,9 +482,10 @@ function PlayerDataService.Init()
 	end
 
 	Players.PlayerRemoving:Connect(function(player)
-		PlayerDataService.Save(player)
+		release(player, "Leaving")
 		profiles[player] = nil
 		ephemeral[player] = nil
+		released[player] = nil
 	end)
 
 	task.spawn(function()
@@ -293,11 +505,12 @@ function PlayerDataService.Init()
 		for player in profiles do
 			pending += 1
 			task.spawn(function()
-				PlayerDataService.Save(player)
+				release(player, "Shutdown")
 				pending -= 1
 			end)
 		end
-		while pending > 0 do
+		local deadline = os.clock() + 25
+		while pending > 0 and os.clock() < deadline do
 			task.wait(0.1)
 		end
 	end)

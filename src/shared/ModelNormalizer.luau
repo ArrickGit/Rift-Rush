@@ -49,4 +49,11 @@ function ModelNormalizer.SanitizeAndNormalize(rawModel: Model, targetSize: Vecto
 	return rawModel
 end
 
+-- Like SanitizeAndNormalize, but scales the model uniformly so it fits inside `box` (landmark stations).
+function ModelNormalizer.FitInBox(rawModel: Model, box: Vector3): Model
+	local _, size = rawModel:GetBoundingBox()
+	local scale = math.min(box.X / math.max(size.X, 0.05), box.Y / math.max(size.Y, 0.05), box.Z / math.max(size.Z, 0.05))
+	return ModelNormalizer.SanitizeAndNormalize(rawModel, Vector3.new(0, size.Y * scale, 0))
+end
+
 return ModelNormalizer

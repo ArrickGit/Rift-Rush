@@ -17,7 +17,14 @@
 --   * TownHubService provides a BasePart named "TownSpawn" in Workspace for extraction landings.
 --   * MonetizationService calls HoldDefeat while a Robux recovery prompt is open, and sets the Workspace
 --     RiftSurgeEndsAt attribute that boosts everyone's XP / Dust. Supercharged Run Tokens are spent in StartRun.
---   * CombatService listens to RoomCleared to offer Upgrade cards.
+--   * CombatService listens to RoomCleared to offer Upgrade cards, and LootEvent ("Chest" / "Anchor") for Treasure
+--     Tooth. It sets DustMultProvider (Hungry Coin) alongside RunHpMultProvider.
+--   * RelicService sets RelicDropHandler(player, run, source) and is called for every boss Anchor
+--     ("MiniBoss" / "WorldBoss") and opened chest ("Chest"); it rolls the drop itself.
+--   * Treasure rooms raise Rift Shrine curse altars (CurseConfig); accepted curses live on the RunPlayer and are
+--     read back through GetCurseMods. HazardService reads GetActiveRuns / GetPoisonTop for the acid flood.
+--   * Kills award Weapon Mastery XP (MasteryService) and feed lifetime stats / quests (QuestService).
+--   * PlayerDataService.BeforeRelease settles a leaving player's pouch before their final save.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -26,6 +33,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
+local CurseConfig = require(Shared:WaitForChild("CurseConfig"))
 local EnemyConfig = require(Shared:WaitForChild("EnemyConfig"))
 local FormulaEngine = require(Shared:WaitForChild("FormulaEngine"))
 local MonetizationConfig = require(Shared:WaitForChild("MonetizationConfig"))
@@ -33,7 +41,9 @@ local Physics25D = require(Shared:WaitForChild("Physics25D"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local RoomAsciiTemplates = require(Shared:WaitForChild("RoomAsciiTemplates"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local MasteryService = require(script.Parent:WaitForChild("MasteryService"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
+local QuestService = require(script.Parent:WaitForChild("QuestService"))
 local RoomBuilderService = require(script.Parent:WaitForChild("RoomBuilderService"))
 
 type PlayerProfileData = PlayerDataService.PlayerProfileData
@@ -54,6 +64,7 @@ type RunPlayer = {
 	PendingSpawn: CFrame?, -- where the next character spawns (Revive); nil = room spawn
 	Shielded: boolean, -- Revive grants a short ForceField on the next spawn
 	Supercharged: boolean, -- a Supercharged Run Token was spent on this run
+	Curses: { string }, -- CurseConfig ids accepted at Rift Shrine altars this run
 }
 
 type ActiveRoom = {
@@ -70,6 +81,7 @@ type ActiveRoom = {
 	Chests: { BasePart },
 	ChestsForfeited: boolean,
 	PoisonTop: number,
+	CurseOffers: { string }, -- curse ids on this room's altars that nobody has taken yet
 }
 
 export type Run = {
@@ -135,6 +147,14 @@ local nextRunId = 1
 
 -- Set by CombatService: (player) -> multiplier applied to Max HP by run upgrades (1 = none).
 RunManagerService.RunHpMultProvider = nil :: ((Player) -> number)?
+-- Set by CombatService: (player) -> extra Rift Dust multiplier from run relics (Hungry Coin; 1 = none).
+RunManagerService.DustMultProvider = nil :: ((Player) -> number)?
+-- Set by RelicService: rolls (and grants) a relic drop. source: "MiniBoss" | "WorldBoss" | "Chest".
+RunManagerService.RelicDropHandler = nil :: ((Player, Run, string) -> ())?
+
+local lootEvent = Instance.new("BindableEvent")
+-- Fires (player: Player, kind: "Chest" | "Anchor") when a player opens a chest or reaches a Rift Anchor alive.
+RunManagerService.LootEvent = lootEvent.Event :: RBXScriptSignal
 
 local runStateRemote: RemoteEvent
 local notifyRemote: RemoteEvent
@@ -205,6 +225,11 @@ end
 
 local function hasInsurancePass(player: Player): boolean
 	return player:GetAttribute("HasInsurancePass") == true
+end
+
+local function curseMods(run: Run, player: Player): CurseConfig.CurseMods
+	local runPlayer = run.Players[player]
+	return CurseConfig.Combine(if runPlayer then runPlayer.Curses else {})
 end
 
 -- Server Rift Surge (Robux / milestone): everyone in the server earns extra XP & Dust while it lasts.
@@ -298,9 +323,10 @@ local function computeDust(player: Player, profile: PlayerProfileData, run: Run,
 	local passDust = if player:GetAttribute("HasDoubleDust") == true then 2 else 1
 	local runPlayer = run.Players[player]
 	local supercharge = if runPlayer and runPlayer.Supercharged then MonetizationConfig.SUPERCHARGE_DUST_MULT else 1
+	local relicDust = if RunManagerService.DustMultProvider then RunManagerService.DustMultProvider(player) else 1
 	local baseDust = ROOM_DUST_BASE + ROOM_DUST_PER_ROOM * run.Depth
 	local dust = baseDust * factor * getEnvMult(profile, run) * FormulaEngine.GetDepthEcoMult(run.Depth) * rebEco
-		* sparkEco * linkDust * passDust * supercharge * surgeMult()
+		* sparkEco * linkDust * passDust * supercharge * surgeMult() * relicDust * curseMods(run, player).DustMult
 	return math.max(1, math.round(dust))
 end
 
@@ -334,6 +360,10 @@ local function creditLoot(player: Player, bag: LootBag)
 		profile.BossCores += bag.BossCores
 		profile.RelicShards += bag.RelicShards
 	end)
+	if bag.Dust > 0 then
+		PlayerDataService.BumpStat(player, "DustBanked", bag.Dust)
+		QuestService.Track(player, "DustBanked", bag.Dust)
+	end
 end
 
 -- Move a player's pouch into their profile according to `mode`; returns what was actually credited.
@@ -497,6 +527,13 @@ local function spawnChest(run: Run, room: ActiveRoom, position: Vector3)
 			runPlayer.Unsecured.RelicShards += shards
 		end
 		pushState(run, player, "ChestOpened", { Dust = dust, RelicShards = shards })
+		PlayerDataService.BumpStat(player, "ChestsOpened", 1)
+		QuestService.Track(player, "ChestsOpened", 1)
+		lootEvent:Fire(player, "Chest")
+		local dropHandler = RunManagerService.RelicDropHandler
+		if dropHandler then
+			task.spawn(dropHandler, player, run, "Chest")
+		end
 
 		-- The chest disappears once every living player has opened it.
 		for otherPlayer, other in run.Players do
@@ -506,6 +543,64 @@ local function spawnChest(run: Run, room: ActiveRoom, position: Vector3)
 		end
 		chest:Destroy()
 	end)
+end
+
+-- Rift Shrine curses -------------------------------------------------------------------------------------------
+
+-- Re-applies Max HP after a curse changed it, keeping the player's current health fraction.
+local function refreshRunHealth(run: Run, player: Player)
+	local profile = PlayerDataService.Get(player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not profile or not humanoid or humanoid.Health <= 0 then
+		return
+	end
+	local provider = RunManagerService.RunHpMultProvider
+	local fraction = humanoid.Health / math.max(1, humanoid.MaxHealth)
+	local maxHP = FormulaEngine.GetPlayerMaxHP(profile.HunterLevel, profile.LegacyBonusLevels, profile.RebirthTier,
+		nodeLevel(profile, NODE_MIGHT), if provider then provider(player) else 1, curseMods(run, player).HpMult)
+	humanoid.MaxHealth = maxHP
+	humanoid.Health = math.max(1, maxHP * fraction)
+end
+
+local function acceptCurse(run: Run, room: ActiveRoom, player: Player, curseId: string, altar: Model)
+	local runPlayer = run.Players[player]
+	local info = CurseConfig.Curses[curseId]
+	if not runPlayer or runPlayer.Status ~= "Alive" or not info or not table.find(room.CurseOffers, curseId) then
+		return
+	end
+	if #runPlayer.Curses >= CurseConfig.MAX_CURSES then
+		notify(player, ("You already carry %d curses — the shrine refuses you."):format(CurseConfig.MAX_CURSES))
+		return
+	end
+	table.remove(room.CurseOffers, table.find(room.CurseOffers, curseId) :: number)
+	table.insert(runPlayer.Curses, curseId)
+	player:SetAttribute("RunCurses", table.concat(runPlayer.Curses, ","))
+	altar:Destroy()
+	refreshRunHealth(run, player)
+	PlayerDataService.BumpStat(player, "CursesAccepted", 1)
+	QuestService.Track(player, "CursesAccepted", 1)
+	notify(player, ("%s %s accepted: %s, %s"):format(info.Icon, info.Name, info.Boon, info.Bane))
+	pushState(run, player, "CurseAccepted", { Curse = curseId })
+end
+
+-- Two altars stand on the floor of every Treasure room, each offering a different pact for the rest of the run.
+local function spawnCurseAltars(run: Run, room: ActiveRoom)
+	local pool = table.clone(CurseConfig.Order)
+	local built = room.Built
+	for index = 1, CurseConfig.ALTARS_PER_SHRINE do
+		if #pool == 0 then
+			break
+		end
+		local curseId = table.remove(pool, run.Rng:NextInteger(1, #pool)) :: string
+		local info = CurseConfig.Curses[curseId]
+		local x = built.Origin.X + built.Width * (if index == 1 then 0.33 else 0.62)
+		local altar, prompt = RoomBuilderService.CreateCurseAltar(built, Vector3.new(x, built.Origin.Y + RoomAsciiTemplates.TILE_SIZE.Y, 0), info)
+		table.insert(room.CurseOffers, curseId)
+		prompt.Triggered:Connect(function(player: Player)
+			acceptCurse(run, room, player, curseId, altar)
+		end)
+	end
 end
 
 -- Rewards & unlocks -------------------------------------------------------------------------------------------
@@ -555,6 +650,7 @@ local function reachAnchor(run: Run)
 
 	local cores = math.max(1, run.Depth // 5)
 	local shards = BOSS_SHARD_BASE + run.Depth // 10
+	local bossSource = if run.Depth % 10 == 5 then "MiniBoss" else "WorldBoss"
 
 	for player, runPlayer in run.Players do
 		runPlayer.Decision = nil
@@ -565,6 +661,11 @@ local function reachAnchor(run: Run)
 			runPlayer.Unsecured.BossCores += cores + bonus
 			runPlayer.Unsecured.RelicShards += shards + bonus
 			settle(run, runPlayer, "All")
+			lootEvent:Fire(player, "Anchor")
+			local dropHandler = RunManagerService.RelicDropHandler
+			if dropHandler then
+				task.spawn(dropHandler, player, run, bossSource)
+			end
 
 			applyAnchorUnlocks(player, profile, run)
 			PlayerDataService.Replicate(player)
@@ -594,6 +695,12 @@ local function clearRoom(run: Run)
 	end
 	room.Cleared = true
 	payRoom(run)
+	for player, runPlayer in run.Players do
+		if runPlayer.Status == "Alive" then
+			PlayerDataService.BumpStat(player, "RoomsCleared", 1)
+			QuestService.Track(player, "RoomsCleared", 1)
+		end
+	end
 
 	if room.Type == "Boss" then
 		reachAnchor(run)
@@ -635,8 +742,10 @@ local function applyRunHealth(player: Player, humanoid: Humanoid)
 		return
 	end
 	local provider = RunManagerService.RunHpMultProvider
+	local run = playerRun[player]
 	local maxHP = FormulaEngine.GetPlayerMaxHP(profile.HunterLevel, profile.LegacyBonusLevels, profile.RebirthTier,
-		nodeLevel(profile, NODE_MIGHT), if provider then provider(player) else 1)
+		nodeLevel(profile, NODE_MIGHT), if provider then provider(player) else 1,
+		if run then curseMods(run, player).HpMult else 1)
 	humanoid.MaxHealth = maxHP
 	humanoid.Health = maxHP
 end
@@ -652,6 +761,7 @@ leaveRun = function(run: Run, player: Player, reason: string, mode: SettleMode, 
 	run.Players[player] = nil
 	playerRun[player] = nil
 	player:SetAttribute("RunId", nil)
+	player:SetAttribute("RunCurses", nil)
 
 	if not silent then
 		runStateRemote:FireClient(player, {
@@ -708,6 +818,7 @@ loadRoom = function(run: Run)
 		Chests = {},
 		ChestsForfeited = false,
 		PoisonTop = built.Origin.Y,
+		CurseOffers = {},
 	}
 	run.Room = room
 	run.Phase = "Room"
@@ -722,6 +833,14 @@ loadRoom = function(run: Run)
 		RoomBuilderService.SetExitOpen(built, true)
 		for _, position in built.ChestSpawns do
 			spawnChest(run, room, position)
+		end
+		if room.Type == "Treasure" then
+			spawnCurseAltars(run, room)
+		end
+	end
+	for player, runPlayer in run.Players do
+		if runPlayer.Status == "Alive" then
+			PlayerDataService.BumpStat(player, "HighestRoom", run.Depth, true)
 		end
 	end
 
@@ -751,6 +870,8 @@ local function resolveAnchor(run: Run, force: boolean)
 	for _, player in snapshotPlayers(run) do
 		local runPlayer = run.Players[player]
 		if runPlayer and runPlayer.Status == "Alive" and (runPlayer.Decision == "Extract" or (force and runPlayer.Decision == nil)) then
+			PlayerDataService.BumpStat(player, "Extractions", 1)
+			QuestService.Track(player, "Extractions", 1)
 			leaveRun(run, player, "Extract", "All", false)
 		end
 	end
@@ -923,15 +1044,28 @@ reportEnemyDefeated = function(enemy: Model, killer: Player?)
 	enemy:Destroy()
 
 	local baseXP = enemy:GetAttribute("XPValue")
-	if type(baseXP) == "number" then
-		for player, runPlayer in run.Players do
-			local profile = PlayerDataService.Get(player)
-			if runPlayer.Status == "Alive" and profile then
+	local kind = enemy:GetAttribute("EnemyKind")
+	local masteryKind = if kind == "Boss" then (if run.Depth % 10 == 5 then "MiniBoss" else "WorldBoss")
+		elseif kind == "Elite" then "Elite" else "Normal"
+	for player, runPlayer in run.Players do
+		local profile = PlayerDataService.Get(player)
+		if runPlayer.Status == "Alive" and profile then
+			if type(baseXP) == "number" then
 				local levels = addHunterXP(profile, computeXP(player, profile, run, baseXP))
 				if levels > 0 then
 					notify(player, ("Level Up! Hunter Level %d"):format(profile.HunterLevel))
 					PlayerDataService.Replicate(player)
 				end
+			end
+			MasteryService.AwardKill(player, masteryKind, run.WorldIndex, run.Corruption)
+			PlayerDataService.BumpStat(player, "Kills", 1)
+			QuestService.Track(player, "Kills", 1)
+			if kind == "Elite" then
+				PlayerDataService.BumpStat(player, "EliteKills", 1)
+				QuestService.Track(player, "EliteKills", 1)
+			elseif kind == "Boss" then
+				PlayerDataService.BumpStat(player, "BossKills", 1)
+				QuestService.Track(player, "BossKills", 1)
 			end
 		end
 	end
@@ -958,7 +1092,8 @@ local function tickPoison(run: Run, room: ActiveRoom, dt: number)
 	end
 	local ceiling = room.Built.Origin.Y + room.Built.Height - 6
 	room.PoisonTop = math.min(ceiling, room.PoisonTop + room.Built.PoisonSpeed * dt)
-	poison.Position = Vector3.new(poison.Position.X, room.PoisonTop - poison.Size.Y / 2, 0)
+	-- Clients animate the 3-layer acid flood toward this height (AmbientController); the part itself never moves.
+	poison:SetAttribute("SurfaceY", room.PoisonTop)
 
 	for _, chest in room.Chests do
 		if chest.Parent and room.PoisonTop >= chest.Position.Y then
@@ -996,6 +1131,13 @@ local function tickExit(run: Run, room: ActiveRoom)
 	local now = os.clock()
 	if not room.ExitEnteredAt then
 		room.ExitEnteredAt = now
+		if room.Type == "Jump" then
+			for player, runPlayer in run.Players do
+				if runPlayer.Status == "Alive" then
+					QuestService.Track(player, "JumpRooms", 1)
+				end
+			end
+		end
 	end
 	if inZone >= alive or now - (room.ExitEnteredAt :: number) >= EXIT_STRAGGLER_SECONDS then
 		advanceRoom(run)
@@ -1108,6 +1250,49 @@ end
 
 RunManagerService.GetLinkBonus = getLinkBonus
 
+-- Combined multipliers of every curse the player accepted this run (all 1 / 0 outside a run).
+function RunManagerService.GetCurseMods(player: Player): CurseConfig.CurseMods
+	local run = playerRun[player]
+	return if run then curseMods(run, player) else CurseConfig.Combine({})
+end
+
+function RunManagerService.GetCurses(player: Player): { string }
+	local run = playerRun[player]
+	local runPlayer = if run then run.Players[player] else nil
+	return if runPlayer then table.clone(runPlayer.Curses) else {}
+end
+
+-- Adds loot to a living player's Unsecured Pouch (relic duplicates, Loaded Deck gold) and refreshes their HUD.
+function RunManagerService.AddUnsecured(player: Player, bag: LootBag)
+	local run = playerRun[player]
+	local runPlayer = if run then run.Players[player] else nil
+	if not run or not runPlayer or runPlayer.Status ~= "Alive" then
+		return
+	end
+	addBag(runPlayer.Unsecured, bag)
+	pushState(run, player, "Progress")
+end
+
+-- Every live run (HazardService walks them for the acid flood).
+function RunManagerService.GetActiveRuns(): { Run }
+	local list: { Run } = {}
+	for _, run in runs do
+		if run.Phase ~= "Ended" then
+			table.insert(list, run)
+		end
+	end
+	return list
+end
+
+-- Surface height of the current room's rising acid, or nil when the room has none.
+function RunManagerService.GetPoisonTop(run: Run): number?
+	local room = run.Room
+	if room and room.Built.Poison and run.Phase == "Room" then
+		return room.PoisonTop
+	end
+	return nil
+end
+
 -- Starts a run for 1-4 players. The first player is the host whose World / Corruption unlocks gate the request;
 -- the rest join through Rift Sidekick Sync. Returns (success, message).
 function RunManagerService.StartRun(players: { Player }, worldIndex: number, corruptionTier: number): (boolean, string)
@@ -1184,6 +1369,7 @@ function RunManagerService.StartRun(players: { Player }, worldIndex: number, cor
 			PendingSpawn = nil,
 			Shielded = false,
 			Supercharged = false,
+			Curses = {},
 		}
 		local runPlayer = run.Players[player]
 		playerRun[player] = run
@@ -1205,6 +1391,7 @@ function RunManagerService.StartRun(players: { Player }, worldIndex: number, cor
 		end
 	end
 
+	RoomBuilderService.BuildVista(run.Origin, RoomAsciiTemplates.COLUMNS * RoomAsciiTemplates.TILE_SIZE.X, folder, run.WorldIndex * 101 + slot)
 	pushStateAll(run, "RunStart")
 	loadRoom(run)
 	return true, "Run started"
@@ -1268,6 +1455,15 @@ function RunManagerService.Init()
 	for _, player in Players:GetPlayers() do
 		trackPlayer(player)
 	end
+	-- Settle the pouch before PlayerDataService's final save: a disconnect counts as a defeat, but a server
+	-- shutdown is never the player's fault, so it banks everything.
+	PlayerDataService.BeforeRelease(function(player: Player, reason: string)
+		local run = playerRun[player]
+		if run then
+			leaveRun(run, player, if reason == "Shutdown" then "Shutdown" else "Disconnected",
+				if reason == "Shutdown" then "All" else "Defeat", true)
+		end
+	end)
 	Players.PlayerRemoving:Connect(function(player)
 		lastStartRequest[player] = nil
 		local run = playerRun[player]

@@ -3,7 +3,9 @@
 -- Central lookup table for all 3D Prefabs, 2D Icons, Colors, and Audio.
 -- If a custom 3D model is not found in ReplicatedStorage.Assets, builds a stylized Neon/SmoothPlastic procedural fallback!
 
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LandmarkBuilder = require(script.Parent.LandmarkBuilder)
 local ModelNormalizer = require(script.Parent.ModelNormalizer)
 
 export type RarityStyle = { Color: Color3, Glow: Color3 }
@@ -187,40 +189,31 @@ function AssetRegistry.CreateWeaponModel(weaponKey: string, accent: Color3?): Mo
 	return model
 end
 
--- Town Hub stations (Section 5.1). Custom models go in ReplicatedStorage.Assets.Town.<Key>.
+-- Town Hub stations (Section 5.1). Custom models go in ReplicatedStorage.Assets.Town.<Key>. Every station except the
+-- Rift Gate is a Hero Landmark (Section 33.1): fitted into LandmarkBuilder.LANDMARK_SIZE (12-16 studs tall) on top
+-- of its own themed Sanctuary Dais.
 export type StationLook = { Name: string, Color: Color3, Size: Vector3, Icon: string }
+
+local LANDMARK = LandmarkBuilder.LANDMARK_SIZE
 
 AssetRegistry.TownStations = {
 	RiftGate = { Name = "Central Rift Gate", Color = Color3.fromRGB(190, 95, 255), Size = Vector3.new(9, 12, 2), Icon = "🌀" },
-	AscensionPedestal = { Name = "Ascension Pedestal", Color = Color3.fromRGB(255, 75, 110), Size = Vector3.new(5, 4, 5), Icon = "✨" },
-	SparkSanctum = { Name = "Spark Sanctum", Color = Color3.fromRGB(255, 150, 60), Size = Vector3.new(6, 4, 4), Icon = "⭐" },
-	Blacksmith = { Name = "Blacksmith", Color = Color3.fromRGB(255, 120, 40), Size = Vector3.new(6, 4, 4), Icon = "⚒️" },
-	LegionHall = { Name = "Mastery & Legion Hall", Color = Color3.fromRGB(90, 200, 255), Size = Vector3.new(6, 4, 4), Icon = "🛡️" },
-	StarForge = { Name = "Star-Forge & Relic Vault", Color = Color3.fromRGB(80, 160, 255), Size = Vector3.new(6, 4, 4), Icon = "🔨" },
-	QuestBoard = { Name = "Quest Board", Color = Color3.fromRGB(240, 220, 120), Size = Vector3.new(5, 5, 1), Icon = "📜" },
-	HallOfChampions = { Name = "Hall of Champions", Color = Color3.fromRGB(255, 210, 70), Size = Vector3.new(7, 3, 4), Icon = "🏆" },
-	RiftShrine = { Name = "Rift Shrine", Color = Color3.fromRGB(120, 255, 200), Size = Vector3.new(4, 5, 4), Icon = "🔮" },
+	AscensionPedestal = { Name = "Ascension Pedestal", Color = Color3.fromRGB(255, 75, 110), Size = LANDMARK, Icon = "✨" },
+	SparkSanctum = { Name = "Spark Sanctum", Color = Color3.fromRGB(255, 150, 60), Size = LANDMARK, Icon = "⭐" },
+	Blacksmith = { Name = "Blacksmith", Color = Color3.fromRGB(255, 120, 40), Size = LANDMARK, Icon = "⚒️" },
+	LegionHall = { Name = "Mastery & Legion Hall", Color = Color3.fromRGB(90, 200, 255), Size = LANDMARK, Icon = "🛡️" },
+	StarForge = { Name = "Star-Forge & Relic Vault", Color = Color3.fromRGB(170, 110, 255), Size = LANDMARK, Icon = "🔨" },
+	QuestBoard = { Name = "Quest Board", Color = Color3.fromRGB(240, 220, 120), Size = LANDMARK, Icon = "📜" },
+	HallOfChampions = { Name = "Hall of Champions", Color = Color3.fromRGB(255, 210, 70), Size = LANDMARK, Icon = "🏆" },
+	RiftShrine = { Name = "Rift Shrine", Color = Color3.fromRGB(120, 255, 200), Size = LANDMARK, Icon = "🔮" },
 } :: { [string]: StationLook }
 
-local function addLabel(part: BasePart, text: string, color: Color3)
-	local gui = Instance.new("BillboardGui")
-	gui.Name = "StationLabel"
-	gui.Size = UDim2.fromOffset(220, 40)
-	gui.StudsOffset = Vector3.new(0, part.Size.Y / 2 + 3.5, 0)
-	gui.LightInfluence = 0
-	gui.MaxDistance = 120
-	gui.Parent = part
-
-	local label = Instance.new("TextLabel")
-	label.Size = UDim2.fromScale(1, 1)
-	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.GothamBold
-	label.TextScaled = true
-	label.TextColor3 = Color3.new(1, 1, 1)
-	label.TextStrokeColor3 = color:Lerp(Color3.new(0, 0, 0), 0.6)
-	label.TextStrokeTransparency = 0.2
-	label.Text = text
-	label.Parent = gui
+-- Persistent overhead waypoint (WaypointController) for any interactable: tag + display attributes.
+function AssetRegistry.TagWaypoint(instance: Instance, name: string, icon: string, color: Color3)
+	instance:SetAttribute("WaypointName", name)
+	instance:SetAttribute("WaypointIcon", icon)
+	instance:SetAttribute("WaypointColor", color)
+	CollectionService:AddTag(instance, "RiftWaypoint")
 end
 
 local function newStationPart(model: Model, name: string, size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material): Part
@@ -249,29 +242,61 @@ local function setBottomPivot(model: Model, pivot: CFrame)
 	end
 end
 
--- Station prefab whose pivot is its bottom-centre, so callers can PivotTo the floor point directly. Prompts hang on
--- the PrimaryPart. Everything is anchored and non-colliding so stations never block the 2.5D lane.
+-- Procedural landmark (no prefab in Assets.Town): a stone shrine with pillars, a roof and a floating crystal, built
+-- standing on Y = 0 and filling `size`.
+local function buildFallbackLandmark(model: Model, look: StationLook)
+	local size = look.Size
+	local stone = look.Color:Lerp(Color3.fromRGB(60, 55, 70), 0.65)
+	newStationPart(model, "Base", Vector3.new(size.X * 0.8, size.Y * 0.18, size.Z * 0.8), CFrame.new(0, size.Y * 0.09, 0),
+		stone, Enum.Material.Slate)
+	for _, x in { -1, 1 } do
+		for _, z in { -1, 1 } do
+			newStationPart(model, "Pillar", Vector3.new(1.2, size.Y * 0.55, 1.2),
+				CFrame.new(x * size.X * 0.32, size.Y * 0.455, z * size.Z * 0.28), stone:Lerp(Color3.new(1, 1, 1), 0.25), Enum.Material.Marble)
+		end
+	end
+	newStationPart(model, "Roof", Vector3.new(size.X * 0.85, size.Y * 0.08, size.Z * 0.85), CFrame.new(0, size.Y * 0.77, 0),
+		look.Color, Enum.Material.Neon)
+	local crystal = newStationPart(model, "Crystal", Vector3.new(2.2, 3.2, 2.2), CFrame.new(0, size.Y * 0.9, 0) * CFrame.Angles(0, math.pi / 4, 0),
+		look.Color, Enum.Material.Glass)
+	addGlow(crystal, look.Color, 16, 1.8)
+end
+
+-- Station whose pivot is its bottom-centre, so callers can PivotTo the floor point directly. The prompt hangs on the
+-- PrimaryPart (an invisible anchor in the landmark's middle). Everything is anchored and non-colliding so stations
+-- never block the 2.5D lane. Landmark stations are their Sanctuary Dais plus the prefab fitted on top.
 function AssetRegistry.CreateStationModel(stationKey: string): Model
 	local look = AssetRegistry.TownStations[stationKey] or AssetRegistry.TownStations.QuestBoard
-	local title = look.Icon .. " " .. look.Name
-
-	local customPrefab = findCustomPrefab("Town", stationKey)
-	if customPrefab then
-		local model = ModelNormalizer.SanitizeAndNormalize(customPrefab:Clone(), look.Size)
-		local cf, size = model:GetBoundingBox()
-		setBottomPivot(model, cf * CFrame.new(0, -size.Y / 2, 0))
-		if model.PrimaryPart then
-			addLabel(model.PrimaryPart, title, look.Color)
+	if stationKey ~= "RiftGate" then
+		local station = Instance.new("Model")
+		station.Name = stationKey
+		local floorY = LandmarkBuilder.BuildDais(stationKey, station)
+		local landmark: Model
+		local customPrefab = findCustomPrefab("Town", stationKey)
+		if customPrefab then
+			landmark = ModelNormalizer.FitInBox(customPrefab:Clone(), look.Size)
+		else
+			landmark = Instance.new("Model")
+			buildFallbackLandmark(landmark, look)
 		end
-		return model
+		landmark.Name = "Landmark"
+		local cf, size = landmark:GetBoundingBox()
+		landmark:PivotTo(landmark:GetPivot() + (Vector3.new(0, floorY + size.Y / 2, 0) - cf.Position))
+		landmark.Parent = station
+		local anchor = newStationPart(station, "PromptAnchor", Vector3.new(2, 2, 2), CFrame.new(0, floorY + size.Y / 2, 0),
+			look.Color, Enum.Material.SmoothPlastic)
+		anchor.Transparency = 1
+		station.PrimaryPart = anchor
+		setBottomPivot(station, CFrame.new())
+		AssetRegistry.TagWaypoint(station, look.Name, look.Icon, look.Color)
+		return station
 	end
 
 	local model = Instance.new("Model")
 	model.Name = stationKey
-	local stone = look.Color:Lerp(Color3.fromRGB(60, 55, 70), 0.65)
 	local base: Part
 
-	if stationKey == "RiftGate" then
+	do
 		-- Stone frame with a neon portal disc facing the camera (a Cylinder's long axis is X; turn it onto Z).
 		base = newStationPart(model, "PrimaryPart", Vector3.new(look.Size.X, look.Size.Y, 1.5),
 			CFrame.new(0, look.Size.Y / 2, -1), Color3.fromRGB(70, 60, 90), Enum.Material.Slate)
@@ -280,19 +305,11 @@ function AssetRegistry.CreateStationModel(stationKey: string): Model
 		disc.Shape = Enum.PartType.Cylinder
 		disc.Transparency = 0.15
 		addGlow(disc, look.Color, 24, 2.5)
-	else
-		base = newStationPart(model, "PrimaryPart", look.Size, CFrame.new(0, look.Size.Y / 2, 0), stone, Enum.Material.Slate)
-		newStationPart(model, "Trim", Vector3.new(look.Size.X + 0.3, 0.4, look.Size.Z + 0.3),
-			CFrame.new(0, look.Size.Y - 0.2, 0), look.Color, Enum.Material.Neon)
-		local crystal = newStationPart(model, "Crystal", Vector3.one * 1.8, CFrame.new(0, look.Size.Y + 1.4, 0),
-			look.Color, Enum.Material.Neon)
-		crystal.Shape = Enum.PartType.Ball
-		addGlow(crystal, look.Color, 14, 1.6)
 	end
 
-	addLabel(base, title, look.Color)
 	model.PrimaryPart = base
 	setBottomPivot(model, CFrame.new()) -- parts were built around the origin, standing on Y = 0
+	AssetRegistry.TagWaypoint(model, look.Name, look.Icon, look.Color)
 	return model
 end
 

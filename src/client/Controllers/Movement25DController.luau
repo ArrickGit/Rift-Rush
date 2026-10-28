@@ -80,6 +80,10 @@ platformRaycastParams.FilterType = Enum.RaycastFilterType.Include
 local jumpPads: { [BasePart]: boolean } = {}
 local lastPadLaunch = 0
 
+-- MobileControlsController's virtual joystick / jump button (used when the PlayerModule never loaded).
+local virtualMove = Vector3.zero
+local virtualJump = false
+
 local dashStartedEvent = Instance.new("BindableEvent")
 
 -- Fires (direction: number, inAir: boolean) — used by Shadow Step / Combo Overdrive in Step 4.
@@ -198,7 +202,10 @@ local function readFallbackInput(): (Vector3, boolean)
 	if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down) then
 		z = 1
 	end
-	local jump = UserInputService:IsKeyDown(Enum.KeyCode.Space)
+	local jump = UserInputService:IsKeyDown(Enum.KeyCode.Space) or virtualJump
+	if virtualMove.Magnitude > STICK_DEADZONE then
+		x, z = virtualMove.X, virtualMove.Z
+	end
 	if UserInputService:GetGamepadConnected(Enum.UserInputType.Gamepad1) then
 		for _, input in UserInputService:GetGamepadState(Enum.UserInputType.Gamepad1) do
 			if input.KeyCode == Enum.KeyCode.Thumbstick1 and input.Position.Magnitude > STICK_DEADZONE then
@@ -304,6 +311,21 @@ local function tryDash()
 		state.Root.AssemblyLinearVelocity = Vector3.new(velocity.X, math.max(velocity.Y, FLASH_JUMP_LIFT), 0)
 	end
 	dashStartedEvent:Fire(facing, inAir)
+end
+
+-- On-screen controls (MobileControlsController). Move is ControlModule-style: X right, Z > 0 down.
+function Movement25DController.SetVirtualInput(move: Vector3, jumpHeld: boolean)
+	virtualMove = move
+	virtualJump = jumpHeld
+end
+
+function Movement25DController.Dash()
+	tryDash()
+end
+
+-- True when the default PlayerModule supplies movement (it brings its own mobile thumbstick and jump button).
+function Movement25DController.HasPlayerControls(): boolean
+	return controls ~= nil
 end
 
 local function onDashAction(_actionName: string, inputState: Enum.UserInputState, _input: InputObject): Enum.ContextActionResult
@@ -452,7 +474,7 @@ function Movement25DController.Init()
 			for _, child in player:WaitForChild("PlayerScripts"):GetChildren() do
 				table.insert(found, child.Name)
 			end
-			warn(("[Movement25DController] PlayerModule not found; using built-in keyboard/gamepad input (no mobile thumbstick). PlayerScripts has: %s")
+			warn(("[Movement25DController] PlayerModule not found; using built-in keyboard/gamepad input and MobileControlsController's touch joystick. PlayerScripts has: %s")
 				:format(table.concat(found, ", ")))
 			return
 		end
@@ -487,8 +509,7 @@ function Movement25DController.Init()
 		end
 	end)
 
-	ContextActionService:BindAction(DASH_ACTION, onDashAction, true, Enum.KeyCode.LeftShift, Enum.KeyCode.K, Enum.KeyCode.ButtonB)
-	ContextActionService:SetTitle(DASH_ACTION, "Dash")
+	ContextActionService:BindAction(DASH_ACTION, onDashAction, false, Enum.KeyCode.LeftShift, Enum.KeyCode.K, Enum.KeyCode.ButtonB)
 
 	RunService:BindToRenderStep(INPUT_STEP_NAME, Enum.RenderPriority.Input.Value + 1, onInputStep)
 	RunService.PreSimulation:Connect(onPreSimulation)

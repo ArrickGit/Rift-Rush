@@ -7,7 +7,12 @@
 --   * Rift Anchor modal (RunStateChanged "Anchor"): Extract vs Push Deeper with the decision timer.
 --   * Rift Collapse defeat screen (Section 20): Accept, Anchor Token options and the three Robux recoveries.
 --   * Town Hub panels (OpenStation): Rift Gate world / corruption picker, Ascension Pedestal (rebirth), Spark
---     Sanctum (Ascension Shop) and the Rift Shrine store.
+--     Sanctum (Ascension Shop), the Rift Shrine store, Blacksmith (forge / reactivate weapons), Legion Hall (Mastery
+--     & Link Skills), Star-Forge (relics, Star-Force, Starting Relics), Quest Board and Hall of Champions.
+--   * The Bag (I / B / Select / HUD button): equipped weapon & Mastery, weapons, Link Skills, Starting Relics and,
+--     during a run, the run's relics and curses. Usable anywhere; loadout changes are town-only.
+--   * Weapon Mastery bar under the XP bar (MasteryUpdated), shield readout on the HP bar, and Celebrate banners
+--     for new relics, Mastery levels and quest rewards.
 -- The client is display-only: every button fires a validated remote, and the server's replies (ProfileUpdated,
 -- RunStateChanged, UpgradeOffer, Notify) are what change the screen. Robux buttons send RequestPurchase { Kind, Key }
 -- and the server picks the product id. A UIScale per layer keeps the 1280x720 layout readable on phones.
@@ -29,6 +34,7 @@ local MonetizationConfig = require(Shared:WaitForChild("MonetizationConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local RoomAsciiTemplates = require(Shared:WaitForChild("RoomAsciiTemplates"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local StationPanels = require(script.Parent:WaitForChild("StationPanels"))
 
 -- UIPack Plus ("ShardUI", by sebattfg) lives in the place file under ReplicatedStorage, never in Rojo/git: its
 -- license forbids redistributing it. With it, buttons, windows, bars, chips and cards are its image "gems"; without it
@@ -107,6 +113,12 @@ local WINDOW_COLORS = {
 	Upgrade = Color3.fromHex("8a6bf0"),
 	Anchor = Color3.fromHex("3fb4d8"),
 	Defeat = Color3.fromHex("d24a4a"),
+	Blacksmith = Color3.fromHex("e2733a"),
+	LegionHall = Color3.fromHex("3f8fd8"),
+	StarForge = Color3.fromHex("8a5cf0"),
+	QuestBoard = Color3.fromHex("c99a2e"),
+	HallOfChampions = Color3.fromHex("d8a520"),
+	Inventory = Color3.fromHex("4a7fd0"),
 }
 
 local TIER_NAMES: { [number]: string } = {
@@ -180,6 +192,7 @@ local SHOP_BLURBS: { [string]: string } = {
 	RelicVaultKey = "Start runs with an equipped Relic",
 	ExtraLinkSlots = "+2 Hunter Legion Link Skill slots",
 }
+SHOP_BLURBS.RelicVaultKey = "+1 Starting Relic slot for every run"
 
 local DISPLAY_FONT = Enum.Font.FredokaOne -- titles, buttons, numbers
 local BODY_FONT = Enum.Font.FredokaOne -- the pack uses Fredoka One for every line of text
@@ -218,12 +231,17 @@ local profile: Payload? = nil
 local runState: Payload? = nil
 local liveLevel = 1
 local liveXP = 0
+-- Mastery of the equipped weapon from the latest MasteryUpdated (kills only replicate the profile on level-ups).
+local liveMastery: { Weapon: string, Level: number, XP: number, Paragon: number }? = nil
 
 local scaleObjects: { UIScale } = {}
 
 -- HUD
 local hpBar: Bar
 local xpBar: Bar
+local masteryBar: Bar
+local runInfoLabel: TextLabel
+local toggleInventory: () -> () -- defined with the station panels
 local levelLabel: TextLabel
 local currencyLabels: { [string]: TextLabel } = {}
 local bannerTitle: TextLabel
@@ -824,6 +842,30 @@ end
 
 -- HUD ------------------------------------------------------------------------------------------------------------
 
+local function refreshMasteryBar()
+	local data = profile
+	if not data or not masteryBar then
+		return
+	end
+	local weapon = WeaponConfig.Weapons[data.EquippedWeapon]
+	if not weapon then
+		return
+	end
+	local live = liveMastery
+	local level, xp, paragon = 1, 0, 0
+	if live and live.Weapon == weapon.Id then
+		level, xp, paragon = live.Level, live.XP, live.Paragon
+	else
+		local entry = type(data.WeaponMastery) == "table" and data.WeaponMastery[weapon.Id]
+		if type(entry) == "table" then
+			level, xp, paragon = tonumber(entry.Level) or 1, tonumber(entry.XP) or 0, tonumber(entry.ParagonRank) or 0
+		end
+	end
+	local required = WeaponConfig.GetMasteryXPRequired(if level >= WeaponConfig.MAX_MASTERY then WeaponConfig.MAX_MASTERY + paragon else level)
+	setBar(masteryBar, xp / math.max(1, required), ("%s %s %d  ·  %s / %s"):format(weapon.Icon,
+		if paragon > 0 then "Paragon" else "Mastery", if paragon > 0 then paragon else level, formatNumber(xp), formatNumber(required)))
+end
+
 local function refreshProfileHud()
 	local data = profile
 	if not data then
@@ -860,6 +902,7 @@ local function refreshProfileHud()
 	setCurrency("RelicShards", data.RelicShards)
 	setCurrency("RebirthSpark", data.RebirthSparksAvailable)
 	setCurrency("AnchorToken", data.AnchorTokens)
+	refreshMasteryBar()
 end
 
 local function refreshRunBanner()
@@ -901,11 +944,14 @@ local function bindCharacter(character: Model)
 	end
 	local humanoid = found
 	local function update()
-		setBar(hpBar, humanoid.Health / math.max(humanoid.MaxHealth, 1), ("HP %s / %s"):format(
-			formatNumber(math.ceil(humanoid.Health)), formatNumber(humanoid.MaxHealth)))
+		local shield = tonumber(player:GetAttribute("Shield")) or 0
+		setBar(hpBar, humanoid.Health / math.max(humanoid.MaxHealth, 1), ("HP %s / %s%s"):format(
+			formatNumber(math.ceil(humanoid.Health)), formatNumber(humanoid.MaxHealth),
+			if shield > 0 then ("  🛡 %s"):format(formatNumber(shield)) else ""))
 	end
 	table.insert(healthConnections, humanoid.HealthChanged:Connect(update))
 	table.insert(healthConnections, humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(update))
+	table.insert(healthConnections, player:GetAttributeChangedSignal("Shield"):Connect(update))
 	update()
 end
 
@@ -929,6 +975,12 @@ local function buildHud()
 	end
 	hpBar = newBar(status, COLORS.HP, 2)
 	xpBar = newBar(status, COLORS.XP, 3)
+	masteryBar = newBar(status, COLORS.Gold, 4)
+	runInfoLabel = newLabel(status, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextWrapped = true,
+		Font = DISPLAY_FONT, TextSize = 15, TextStrokeTransparency = 0.2, LayoutOrder = 5, Visible = false })
+	newButton(status, "🎒 Bag", COLORS.Accent, function()
+		toggleInventory()
+	end, { Size = UDim2.fromOffset(120, 40), TextSize = 17, LayoutOrder = 6 })
 
 	local wallet: Frame = create("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 12),
 		Size = UDim2.fromOffset(190, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
@@ -990,183 +1042,188 @@ end
 
 -- Upgrade modal --------------------------------------------------------------------------------------------------
 
-local function sendUpgrade(action: string, index: number?)
-	if offerId > 0 then
-		upgradeChosenRemote:FireServer({ OfferId = offerId, Action = action, Index = index })
-	end
-end
-
-local function chooseCard(index: number)
-	if index <= #offerCards then
-		sendUpgrade(if banishMode then "Banish" else "Pick", index)
-	end
-end
-
--- Pack upgrade card: the pack's Card in the rarity's family, a rarity badge on its corner and the description below.
-local RARITY_FAMILIES: { [string]: string } = {
-	Common = "slate",
-	Rare = "cyan",
-	Epic = "violet",
-	Legendary = "amber",
-	Corrupted = "magenta",
-}
-local SHARD_CARD_GAP = 18
-
-local function buildShardUpgradeCard(index: number, card: any)
-	local size: Vector2 = Shard.Card.size("sm")
-	local slot: Frame = create("Frame", { Size = UDim2.fromOffset(size.X, size.Y + 84), BackgroundTransparency = 1,
-		LayoutOrder = index }, cardRow)
-	local pick = function()
-		chooseCard(index)
-	end
-	local hint = if UserInputService.KeyboardEnabled then (" [%d]"):format(index) else ""
-	local gem = Shard.Card.new({ name = tostring(card.Name), variant = "sm",
-		family = RARITY_FAMILIES[tostring(card.Rarity)] or "slate",
-		price = (if banishMode then "Banish" else "Pick") .. hint, priceFamily = if banishMode then "red" else "green",
-		activated = pick })
-	gem.Button.Root.MouseButton1Click:Connect(pick)
-	newLabel(gem.Thumb, { Size = UDim2.fromScale(1, 1), Text = tostring(card.Icon), TextSize = 62, ZIndex = 8,
-		TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
-	gem.Root.Parent = slot
-
-	local stacks = tonumber(card.Stacks) or 0
-	local maxStacks = tonumber(card.MaxStacks) or 1
-	Shard.Badge.attachTo(Shard.Badge.new({ text = tostring(card.Rarity) .. (if maxStacks > 1
-		then (" %d/%d"):format(stacks, maxStacks) else ""), variant = "sm", family = "slate", static = true }), gem.Root)
-
-	local desc = newLabel(slot, { Position = UDim2.fromOffset(0, size.Y + 10), Size = UDim2.new(1, 0, 0, 74),
-		Text = tostring(card.Desc), TextSize = 16, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
-		TextYAlignment = Enum.TextYAlignment.Top })
-	create("UIStroke", { Color = COLORS.Stroke, Thickness = 2, LineJoinMode = Enum.LineJoinMode.Round }, desc)
-end
-
-local function renderOffer()
-	clearGuiChildren(cardRow)
-	local count = #offerCards
-	upgradeTitle.Text = if banishMode
-		then ("<font color='#%s'>🚫 Choose a card to BANISH for this run</font>"):format(COLORS.Bad:ToHex())
-		else "⬆️ <b>Choose an Upgrade</b>"
-	if Shard then
-		local cardWidth = Shard.Card.size("sm").X
-		upgradeFrame.Size = UDim2.fromOffset(math.max(520, count * cardWidth + (count - 1) * SHARD_CARD_GAP + 64), 610)
-	else
-		upgradeFrame.Size = UDim2.fromOffset(math.max(420, count * CARD_WIDTH + (count - 1) * CARD_GAP + 44), 450)
-	end
-
-	for index, card in offerCards do
-		if Shard then
-			buildShardUpgradeCard(index, card)
-			continue
+-- Helpers used only by the modal stay scoped in this block (UIController is close to Luau's 200-local limit).
+local onUpgradeOffer: (any) -> ()
+local buildUpgradeModal: () -> ()
+do
+	local function sendUpgrade(action: string, index: number?)
+		if offerId > 0 then
+			upgradeChosenRemote:FireServer({ OfferId = offerId, Action = action, Index = index })
 		end
-		local style = AssetRegistry.GetRarityStyle(card.Rarity)
-		-- Shop-style card in the rarity colour: striped icon box, outlined text, red edge while banishing.
-		local cardColor = style.Color:Lerp(Color3.new(0, 0, 0), 0.12)
-		local button: TextButton = create("TextButton", {
-			Size = UDim2.new(0, CARD_WIDTH, 1, 0),
-			BackgroundColor3 = cardColor,
-			AutoButtonColor = false,
-			Text = "",
-			LayoutOrder = index,
-		}, cardRow)
-		round(button, 12)
-		outline(button, if banishMode then COLORS.Bad else COLORS.Stroke, if banishMode then 5 else 3)
-		addPressFeedback(button)
-		topLit(button, 0.7)
-		pad(button, 10)
-		local layout = list(button, Enum.FillDirection.Vertical, 6)
-		layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	end
+
+	local function chooseCard(index: number)
+		if index <= #offerCards then
+			sendUpgrade(if banishMode then "Banish" else "Pick", index)
+		end
+	end
+
+	-- Pack upgrade card: the pack's Card in the rarity's family, a rarity badge on its corner and the description below.
+	local RARITY_FAMILIES: { [string]: string } = {
+		Common = "slate",
+		Rare = "cyan",
+		Epic = "violet",
+		Legendary = "amber",
+		Corrupted = "magenta",
+	}
+	local SHARD_CARD_GAP = 18
+
+	local function buildShardUpgradeCard(index: number, card: any)
+		local size: Vector2 = Shard.Card.size("sm")
+		local slot: Frame = create("Frame", { Size = UDim2.fromOffset(size.X, size.Y + 84), BackgroundTransparency = 1,
+			LayoutOrder = index }, cardRow)
+		local pick = function()
+			chooseCard(index)
+		end
+		local hint = if UserInputService.KeyboardEnabled then (" [%d]"):format(index) else ""
+		local gem = Shard.Card.new({ name = tostring(card.Name), variant = "sm",
+			family = RARITY_FAMILIES[tostring(card.Rarity)] or "slate",
+			price = (if banishMode then "Banish" else "Pick") .. hint, priceFamily = if banishMode then "red" else "green",
+			activated = pick })
+		gem.Button.Root.MouseButton1Click:Connect(pick)
+		newLabel(gem.Thumb, { Size = UDim2.fromScale(1, 1), Text = tostring(card.Icon), TextSize = 62, ZIndex = 8,
+			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
+		gem.Root.Parent = slot
 
 		local stacks = tonumber(card.Stacks) or 0
 		local maxStacks = tonumber(card.MaxStacks) or 1
-		newLabel(button, { Size = UDim2.new(1, 0, 0, 16), Text = ("[%d]"):format(index), TextColor3 = COLORS.Muted,
-			TextSize = 12, LayoutOrder = 1, Visible = UserInputService.KeyboardEnabled })
-		local iconBox: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 84), LayoutOrder = 2,
-			BackgroundColor3 = cardColor:Lerp(Color3.new(1, 1, 1), 0.12) }, button)
-		round(iconBox, 8)
-		create("UIStroke", { Color = edgeColor(cardColor), Thickness = 2.5 }, iconBox)
-		addStripes(iconBox, 8)
-		newLabel(iconBox, { Size = UDim2.fromScale(1, 1), Text = tostring(card.Icon), TextSize = 50,
-			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
-		newLabel(button, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = tostring(card.Name),
-			Font = DISPLAY_FONT, TextSize = 20, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
-			TextStrokeTransparency = 0, LayoutOrder = 3 })
-		newLabel(button, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = style.Color:Lerp(Color3.new(1, 1, 1), 0.7),
-			Font = DISPLAY_FONT, TextSize = 15, TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center,
-			LayoutOrder = 4,
-			Text = tostring(card.Rarity):upper() .. (if maxStacks > 1 then ("  ·  %d/%d"):format(stacks, maxStacks) else "") })
-		newLabel(button, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = tostring(card.Desc),
-			TextColor3 = COLORS.Text, TextSize = 15, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
-			TextStrokeTransparency = 0.3, LayoutOrder = 5 })
+		Shard.Badge.attachTo(Shard.Badge.new({ text = tostring(card.Rarity) .. (if maxStacks > 1
+			then (" %d/%d"):format(stacks, maxStacks) else ""), variant = "sm", family = "slate", static = true }), gem.Root)
 
-		button.Activated:Connect(function()
-			chooseCard(index)
-		end)
+		local desc = newLabel(slot, { Position = UDim2.fromOffset(0, size.Y + 10), Size = UDim2.new(1, 0, 0, 74),
+			Text = tostring(card.Desc), TextSize = 16, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Top })
+		create("UIStroke", { Color = COLORS.Stroke, Thickness = 2, LineJoinMode = Enum.LineJoinMode.Round }, desc)
 	end
 
-	setButtonText(rerollButton, ("🎲 Reroll (%d)"):format(offerRerolls))
-	setEnabled(rerollButton, offerRerolls > 0 and not banishMode, COLORS.Accent)
-	banishButton.Visible = offerBanishes > 0
-	setButtonText(banishButton, if banishMode then "Cancel Banish" else ("🚫 Banish (%d)"):format(offerBanishes))
-	upgradeFrame.Visible = true
-	focusFirstButton(cardRow)
-end
-
-local function onUpgradeOffer(payload: any)
-	if type(payload) ~= "table" then
-		return
-	end
-	if payload.Kind == "Offer" and type(payload.Cards) == "table" then
-		if payload.OfferId ~= offerId then
-			banishMode = false
+	local function renderOffer()
+		clearGuiChildren(cardRow)
+		local count = #offerCards
+		upgradeTitle.Text = if banishMode
+			then ("<font color='#%s'>🚫 Choose a card to BANISH for this run</font>"):format(COLORS.Bad:ToHex())
+			else "⬆️ <b>Choose an Upgrade</b>"
+		if Shard then
+			local cardWidth = Shard.Card.size("sm").X
+			upgradeFrame.Size = UDim2.fromOffset(math.max(520, count * cardWidth + (count - 1) * SHARD_CARD_GAP + 64), 610)
+		else
+			upgradeFrame.Size = UDim2.fromOffset(math.max(420, count * CARD_WIDTH + (count - 1) * CARD_GAP + 44), 450)
 		end
-		offerId = tonumber(payload.OfferId) or 0
-		offerCards = payload.Cards
-		offerRerolls = tonumber(payload.Rerolls) or 0
-		offerBanishes = tonumber(payload.Banishes) or 0
-		if offerBanishes <= 0 then
-			banishMode = false
+
+		for index, card in offerCards do
+			if Shard then
+				buildShardUpgradeCard(index, card)
+				continue
+			end
+			local style = AssetRegistry.GetRarityStyle(card.Rarity)
+			-- Shop-style card in the rarity colour: striped icon box, outlined text, red edge while banishing.
+			local cardColor = style.Color:Lerp(Color3.new(0, 0, 0), 0.12)
+			local button: TextButton = create("TextButton", {
+				Size = UDim2.new(0, CARD_WIDTH, 1, 0),
+				BackgroundColor3 = cardColor,
+				AutoButtonColor = false,
+				Text = "",
+				LayoutOrder = index,
+			}, cardRow)
+			round(button, 12)
+			outline(button, if banishMode then COLORS.Bad else COLORS.Stroke, if banishMode then 5 else 3)
+			addPressFeedback(button)
+			topLit(button, 0.7)
+			pad(button, 10)
+			local layout = list(button, Enum.FillDirection.Vertical, 6)
+			layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+			local stacks = tonumber(card.Stacks) or 0
+			local maxStacks = tonumber(card.MaxStacks) or 1
+			newLabel(button, { Size = UDim2.new(1, 0, 0, 16), Text = ("[%d]"):format(index), TextColor3 = COLORS.Muted,
+				TextSize = 12, LayoutOrder = 1, Visible = UserInputService.KeyboardEnabled })
+			local iconBox: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 84), LayoutOrder = 2,
+				BackgroundColor3 = cardColor:Lerp(Color3.new(1, 1, 1), 0.12) }, button)
+			round(iconBox, 8)
+			create("UIStroke", { Color = edgeColor(cardColor), Thickness = 2.5 }, iconBox)
+			addStripes(iconBox, 8)
+			newLabel(iconBox, { Size = UDim2.fromScale(1, 1), Text = tostring(card.Icon), TextSize = 50,
+				TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
+			newLabel(button, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = tostring(card.Name),
+				Font = DISPLAY_FONT, TextSize = 20, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+				TextStrokeTransparency = 0, LayoutOrder = 3 })
+			newLabel(button, { Size = UDim2.new(1, 0, 0, 18), TextColor3 = style.Color:Lerp(Color3.new(1, 1, 1), 0.7),
+				Font = DISPLAY_FONT, TextSize = 15, TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center,
+				LayoutOrder = 4,
+				Text = tostring(card.Rarity):upper() .. (if maxStacks > 1 then ("  ·  %d/%d"):format(stacks, maxStacks) else "") })
+			newLabel(button, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = tostring(card.Desc),
+				TextColor3 = COLORS.Text, TextSize = 15, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+				TextStrokeTransparency = 0.3, LayoutOrder = 5 })
+
+			button.Activated:Connect(function()
+				chooseCard(index)
+			end)
 		end
-		renderOffer()
-	elseif payload.OfferId == 0 or payload.OfferId == offerId then
-		offerId = 0
-		offerCards = {}
-		banishMode = false
-		upgradeFrame.Visible = false
+
+		setButtonText(rerollButton, ("🎲 Reroll (%d)"):format(offerRerolls))
+		setEnabled(rerollButton, offerRerolls > 0 and not banishMode, COLORS.Accent)
+		banishButton.Visible = offerBanishes > 0
+		setButtonText(banishButton, if banishMode then "Cancel Banish" else ("🚫 Banish (%d)"):format(offerBanishes))
+		upgradeFrame.Visible = true
+		focusFirstButton(cardRow)
 	end
-end
 
-local function buildUpgradeModal()
-	local gui = newLayer("RiftUpgrade", 20, false)
-	upgradeWindow = newWindow(gui, WINDOW_COLORS.Upgrade, { AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.52), Size = UDim2.fromOffset(600, 450), Visible = false })
-	upgradeFrame = upgradeWindow.Frame
-	upgradeTitle = upgradeWindow.Title
-	upgradeTitle.TextXAlignment = Enum.TextXAlignment.Center
-	cardRow = create("Frame", { Position = UDim2.fromOffset(0, if Shard then 14 else 8),
-		Size = UDim2.new(1, 0, 1, if Shard then -84 else -66), BackgroundTransparency = 1 }, upgradeWindow.Body)
-	list(cardRow, Enum.FillDirection.Horizontal, if Shard then SHARD_CARD_GAP else CARD_GAP).HorizontalAlignment =
-		Enum.HorizontalAlignment.Center
-
-	local footer: Frame = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
-		Size = UDim2.new(1, 0, 0, if Shard then 60 else 46), BackgroundTransparency = 1 }, upgradeWindow.Body)
-	list(footer, Enum.FillDirection.Horizontal, 12).HorizontalAlignment = Enum.HorizontalAlignment.Center
-	rerollButton = newButton(footer, "Reroll", COLORS.Accent, function()
-		sendUpgrade("Reroll", nil)
-	end, { LayoutOrder = 1 })
-	banishButton = newButton(footer, "Banish", COLORS.Bad, function()
-		banishMode = not banishMode
-		renderOffer()
-	end, { LayoutOrder = 2 })
-
-	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
-		if processed or offerId == 0 or not upgradeFrame.Visible then
+	onUpgradeOffer = function(payload: any)
+		if type(payload) ~= "table" then
 			return
 		end
-		local index = NUMBER_KEYS[input.KeyCode]
-		if index then
-			chooseCard(index)
+		if payload.Kind == "Offer" and type(payload.Cards) == "table" then
+			if payload.OfferId ~= offerId then
+				banishMode = false
+			end
+			offerId = tonumber(payload.OfferId) or 0
+			offerCards = payload.Cards
+			offerRerolls = tonumber(payload.Rerolls) or 0
+			offerBanishes = tonumber(payload.Banishes) or 0
+			if offerBanishes <= 0 then
+				banishMode = false
+			end
+			renderOffer()
+		elseif payload.OfferId == 0 or payload.OfferId == offerId then
+			offerId = 0
+			offerCards = {}
+			banishMode = false
+			upgradeFrame.Visible = false
 		end
-	end)
+	end
+
+	buildUpgradeModal = function()
+		local gui = newLayer("RiftUpgrade", 20, false)
+		upgradeWindow = newWindow(gui, WINDOW_COLORS.Upgrade, { AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.52), Size = UDim2.fromOffset(600, 450), Visible = false })
+		upgradeFrame = upgradeWindow.Frame
+		upgradeTitle = upgradeWindow.Title
+		upgradeTitle.TextXAlignment = Enum.TextXAlignment.Center
+		cardRow = create("Frame", { Position = UDim2.fromOffset(0, if Shard then 14 else 8),
+			Size = UDim2.new(1, 0, 1, if Shard then -84 else -66), BackgroundTransparency = 1 }, upgradeWindow.Body)
+		list(cardRow, Enum.FillDirection.Horizontal, if Shard then SHARD_CARD_GAP else CARD_GAP).HorizontalAlignment =
+			Enum.HorizontalAlignment.Center
+
+		local footer: Frame = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
+			Size = UDim2.new(1, 0, 0, if Shard then 60 else 46), BackgroundTransparency = 1 }, upgradeWindow.Body)
+		list(footer, Enum.FillDirection.Horizontal, 12).HorizontalAlignment = Enum.HorizontalAlignment.Center
+		rerollButton = newButton(footer, "Reroll", COLORS.Accent, function()
+			sendUpgrade("Reroll", nil)
+		end, { LayoutOrder = 1 })
+		banishButton = newButton(footer, "Banish", COLORS.Bad, function()
+			banishMode = not banishMode
+			renderOffer()
+		end, { LayoutOrder = 2 })
+
+		UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+			if processed or offerId == 0 or not upgradeFrame.Visible then
+				return
+			end
+			local index = NUMBER_KEYS[input.KeyCode]
+			if index then
+				chooseCard(index)
+			end
+		end)
+	end
 end
 
 -- Rift Anchor modal ----------------------------------------------------------------------------------------------
@@ -1628,9 +1685,17 @@ local STATION_RENDERERS: { [string]: () -> () } = {
 	RiftShrine = function()
 		renderShop()
 	end,
+	Blacksmith = StationPanels.Renderers.Blacksmith,
+	LegionHall = StationPanels.Renderers.LegionHall,
+	StarForge = StationPanels.Renderers.StarForge,
+	QuestBoard = StationPanels.Renderers.QuestBoard,
+	HallOfChampions = StationPanels.Renderers.HallOfChampions,
+	Inventory = StationPanels.Renderers.Inventory,
 }
 
-local STATION_FETCHES_DATA: { [string]: boolean } = { AscensionPedestal = true, SparkSanctum = true }
+local STATION_FETCHES_DATA: { [string]: boolean } = {
+	AscensionPedestal = true, SparkSanctum = true, QuestBoard = true, HallOfChampions = true,
+}
 
 renderStation = function()
 	if openStation == "RiftShrine" then
@@ -1643,7 +1708,7 @@ renderStation = function()
 		return
 	end
 	local look = AssetRegistry.TownStations[key]
-	stationTitle.Text = if look then ("%s %s"):format(look.Icon, look.Name) else key
+	stationTitle.Text = if key == "Inventory" then "🎒 Bag & Loadout" elseif look then ("%s %s"):format(look.Icon, look.Name) else key
 	local color = WINDOW_COLORS[key] or WINDOW_COLORS.RiftGate
 	setWindowColor(stationWindow, color)
 	if not Shard then
@@ -1681,7 +1746,7 @@ local function scheduleStationRefresh()
 end
 
 local function onOpenStation(payload: any)
-	if type(payload) ~= "table" or type(payload.Station) ~= "string" or inRun() then
+	if type(payload) ~= "table" or type(payload.Station) ~= "string" or (inRun() and payload.Station ~= "Inventory") then
 		return
 	end
 	local key = payload.Station
@@ -1730,9 +1795,18 @@ local function openStationFromMenu(key: string)
 	end)
 end
 
+toggleInventory = function()
+	if openStation == "Inventory" then
+		closeStation()
+	else
+		onOpenStation({ Station = "Inventory" })
+	end
+end
+
 local function buildTownMenu()
 	local gui = newLayer("RiftTownMenu", 12, false)
-	townMenu = create("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0),
+	-- Bottom-left, clear of the status column (bars + Bag button) above it.
+	townMenu = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 12, 1, -12),
 		Size = UDim2.fromOffset(76, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
 	list(townMenu, Enum.FillDirection.Vertical, 10)
 	if Shard then
@@ -1778,250 +1852,254 @@ local SHOP_TAB_HINTS: { [string]: string } = {
 }
 
 
-local function shopItemInfo(item: ShopItem): (number, boolean, string)
-	if item.Kind == "Pass" then
-		local pass = MonetizationConfig.Passes[item.Key]
-		return pass.Price, player:GetAttribute(pass.Attribute) == true, pass.Name
-	end
-	local product = MonetizationConfig.Products[item.Key]
-	return product.Price, false, product.Name
-end
-
-local function buildShardShopCard(item: ShopItem, order: number)
-	local price, owned, fullName = shopItemInfo(item)
-	local buy = function()
-		if not owned then
-			requestPurchase(item.Kind, item.Key)
+-- Card builders stay scoped in this block (UIController is close to Luau's 200-local limit).
+local buildShop: () -> ()
+do
+	local function shopItemInfo(item: ShopItem): (number, boolean, string)
+		if item.Kind == "Pass" then
+			local pass = MonetizationConfig.Passes[item.Key]
+			return pass.Price, player:GetAttribute(pass.Attribute) == true, pass.Name
 		end
-	end
-	local family = familyFor(item.Color)
-	local card = Shard.Card.new({ name = item.Title, variant = "sm", family = family,
-		icon = if item.PackIcon then Shard.Icons[item.PackIcon] else nil,
-		price = if owned then "Owned" else ("R$ %s"):format(formatNumber(price)), layoutOrder = order,
-		activated = buy })
-	-- The price gem sits inside the card and swallows its own clicks, so it buys too.
-	card.Button.Root.MouseButton1Click:Connect(buy)
-	if owned then
-		card.Button:Disable()
-	end
-	if not item.PackIcon then
-		newLabel(card.Thumb, { Size = UDim2.fromScale(1, 1), Text = item.Icon, TextSize = 64, ZIndex = 8,
-			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
-	end
-	card.Root.Parent = shopGrid
-	if item.Tag then
-		Shard.Badge.attachTo(Shard.Badge.new({ text = item.Tag, variant = "sm", family = if family == "red" then "amber" else "red",
-			static = true }), card.Root)
-	end
-	local blurb = ("<b>%s</b>  ·  %s"):format(fullName, SHOP_BLURBS[item.Key] or "")
-	card.Root.MouseEnter:Connect(function()
-		shopInfo.Text = blurb
-	end)
-	card.Root.SelectionGained:Connect(function()
-		shopInfo.Text = blurb
-	end)
-end
-
-local function buildShopCard(item: ShopItem, order: number)
-	local price, owned, fullName = shopItemInfo(item)
-	local card: Frame = create("Frame", { BackgroundColor3 = item.Color, LayoutOrder = order }, shopGrid)
-	round(card, 10)
-	outline(card, COLORS.Stroke, 3)
-	topLit(card, 0.72)
-
-	local iconBox: Frame = create("Frame", { Position = UDim2.fromOffset(8, 8), Size = UDim2.new(1, -16, 0, 110),
-		BackgroundColor3 = item.Color:Lerp(Color3.new(1, 1, 1), 0.12) }, card)
-	round(iconBox, 8)
-	create("UIStroke", { Color = edgeColor(item.Color), Thickness = 2.5 }, iconBox)
-	addStripes(iconBox, 8)
-	newLabel(iconBox, { Size = UDim2.fromScale(1, 1), Text = item.Icon, TextSize = 62,
-		TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
-
-	newLabel(card, { Position = UDim2.fromOffset(4, 122), Size = UDim2.new(1, -8, 0, 26), Text = item.Title,
-		Font = DISPLAY_FONT, TextSize = 21, TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center,
-		TextScaled = false })
-
-	local buy = newButton(card, if owned then "Owned" else ("R$ %s"):format(formatNumber(price)), COLORS.Robux, function()
-		requestPurchase(item.Kind, item.Key)
-	end, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -9), Size = UDim2.new(1, -18, 0, 46),
-		TextSize = 22 })
-	setEnabled(buy, not owned, COLORS.Robux)
-
-	if item.Tag then
-		local tag: TextLabel = newLabel(card, { Position = UDim2.fromOffset(-6, -9), Size = UDim2.fromOffset(0, 24),
-			AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0, BackgroundColor3 = edgeColor(item.Color):Lerp(item.Color, 0.35),
-			Text = item.Tag, Font = DISPLAY_FONT, TextSize = 15, TextStrokeTransparency = 0, ZIndex = 3 })
-		create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tag)
-		round(tag, 6)
-		outline(tag, COLORS.Stroke, 2.5)
+		local product = MonetizationConfig.Products[item.Key]
+		return product.Price, false, product.Name
 	end
 
-	local blurb = ("<b>%s</b>  ·  %s"):format(fullName, SHOP_BLURBS[item.Key] or "")
-	card.MouseEnter:Connect(function()
-		shopInfo.Text = blurb
-	end)
-	buy.SelectionGained:Connect(function()
-		shopInfo.Text = blurb
-	end)
-end
-
-renderShop = function()
-	local data = profile
-	if data then
-		local prefix = function(key: string): string
-			return if Shard then currencyIcon(key) .. " " else ""
-		end
-		shopWallet.RiftDust.Text = prefix("RiftDust") .. formatNumber(tonumber(data.RiftDust) or 0)
-		shopWallet.RebirthSpark.Text = prefix("RebirthSpark") .. formatNumber(tonumber(data.RebirthSparksAvailable) or 0)
-	end
-	for name, button in shopTabs do
-		local selectedColor = if Shard then COLORS.Gold else Color3.fromRGB(95, 210, 255) -- cyan would vanish on the cyan panel
-		setEnabled(button, true, if name == shopTab then selectedColor else Color3.fromRGB(84, 92, 140))
-	end
-	shopInfo.Text = SHOP_TAB_HINTS[shopTab] or ""
-	local scroll = shopGrid.CanvasPosition
-	clearGuiChildren(shopGrid)
-	local order = 0
-	for _, item in SHOP_ITEMS do
-		if table.find(item.Tabs, shopTab) then
-			order += 1
-			if Shard then
-				buildShardShopCard(item, order)
-			else
-				buildShopCard(item, order)
+	local function buildShardShopCard(item: ShopItem, order: number)
+		local price, owned, fullName = shopItemInfo(item)
+		local buy = function()
+			if not owned then
+				requestPurchase(item.Kind, item.Key)
 			end
 		end
-	end
-	shopGrid.CanvasPosition = scroll
-end
-
-local function buildShardShop()
-	local gui = newLayer("RiftShop", 31, false)
-	newScrim(gui)
-	local panel = Shard.Panel.new({ title = "🔮 Shop", family = "cyan", width = 1000, height = 620, headHeight = 80 })
-	shopFrame = panel.Root :: Frame
-	shopFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-	shopFrame.Position = UDim2.fromScale(0.5, 0.5)
-	shopFrame.Visible = false
-	panel.Title.TextSize = 32
-
-	for order, key in { "RiftDust", "RebirthSpark" } do
-		local chip = Shard.Chip.new({ text = currencyIcon(key) .. " 0", variant = "sm", family = "slate", static = true,
-			width = 140, parent = panel.Tools })
-		chip.Root.LayoutOrder = order
-		shopWallet[key] = chip.Label
-	end
-	Shard.IconButton.new({ icon = Shard.Icons.Close, variant = "sm", family = "red", parent = panel.Tools,
-		onClick = closeStation }).Root.LayoutOrder = 3
-
-	local body = panel.Body :: Frame
-	local sidebar: Frame = create("Frame", { Size = UDim2.new(0, 180, 1, 0), BackgroundTransparency = 1 }, body)
-	list(sidebar, Enum.FillDirection.Vertical, 12)
-	for order, name in SHOP_TABS do
-		shopTabs[name] = newButton(sidebar, name, Color3.fromRGB(84, 92, 140), function()
-			shopTab = name
-			shopGrid.CanvasPosition = Vector2.zero
-			renderShop()
-		end, { Size = UDim2.new(1, 0, 0, 54), TextSize = 22, LayoutOrder = order })
+		local family = familyFor(item.Color)
+		local card = Shard.Card.new({ name = item.Title, variant = "sm", family = family,
+			icon = if item.PackIcon then Shard.Icons[item.PackIcon] else nil,
+			price = if owned then "Owned" else ("R$ %s"):format(formatNumber(price)), layoutOrder = order,
+			activated = buy })
+		-- The price gem sits inside the card and swallows its own clicks, so it buys too.
+		card.Button.Root.MouseButton1Click:Connect(buy)
+		if owned then
+			card.Button:Disable()
+		end
+		if not item.PackIcon then
+			newLabel(card.Thumb, { Size = UDim2.fromScale(1, 1), Text = item.Icon, TextSize = 64, ZIndex = 8,
+				TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
+		end
+		card.Root.Parent = shopGrid
+		if item.Tag then
+			Shard.Badge.attachTo(Shard.Badge.new({ text = item.Tag, variant = "sm", family = if family == "red" then "amber" else "red",
+				static = true }), card.Root)
+		end
+		local blurb = ("<b>%s</b>  ·  %s"):format(fullName, SHOP_BLURBS[item.Key] or "")
+		card.Root.MouseEnter:Connect(function()
+			shopInfo.Text = blurb
+		end)
+		card.Root.SelectionGained:Connect(function()
+			shopInfo.Text = blurb
+		end)
 	end
 
-	local infoBar = Shard.Inset.new({ family = "cyan", size = UDim2.new(1, -196, 0, 58), parent = body, scroll = false })
-	infoBar.Root.Position = UDim2.fromOffset(196, 0)
-	shopInfo = newLabel(infoBar.Body, { Size = UDim2.fromScale(1, 1), TextSize = 17, TextColor3 = COLORS.Muted,
-		TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd })
-	-- The inset's padding is tuned for lists; a one-line strip needs less.
-	local infoPad = infoBar.Body:FindFirstChildOfClass("UIPadding")
-	if infoPad then
-		infoPad.PaddingTop = UDim.new(0, 6)
-		infoPad.PaddingBottom = UDim.new(0, 6)
+	local function buildShopCard(item: ShopItem, order: number)
+		local price, owned, fullName = shopItemInfo(item)
+		local card: Frame = create("Frame", { BackgroundColor3 = item.Color, LayoutOrder = order }, shopGrid)
+		round(card, 10)
+		outline(card, COLORS.Stroke, 3)
+		topLit(card, 0.72)
+
+		local iconBox: Frame = create("Frame", { Position = UDim2.fromOffset(8, 8), Size = UDim2.new(1, -16, 0, 110),
+			BackgroundColor3 = item.Color:Lerp(Color3.new(1, 1, 1), 0.12) }, card)
+		round(iconBox, 8)
+		create("UIStroke", { Color = edgeColor(item.Color), Thickness = 2.5 }, iconBox)
+		addStripes(iconBox, 8)
+		newLabel(iconBox, { Size = UDim2.fromScale(1, 1), Text = item.Icon, TextSize = 62,
+			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
+
+		newLabel(card, { Position = UDim2.fromOffset(4, 122), Size = UDim2.new(1, -8, 0, 26), Text = item.Title,
+			Font = DISPLAY_FONT, TextSize = 21, TextStrokeTransparency = 0, TextXAlignment = Enum.TextXAlignment.Center,
+			TextScaled = false })
+
+		local buy = newButton(card, if owned then "Owned" else ("R$ %s"):format(formatNumber(price)), COLORS.Robux, function()
+			requestPurchase(item.Kind, item.Key)
+		end, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -9), Size = UDim2.new(1, -18, 0, 46),
+			TextSize = 22 })
+		setEnabled(buy, not owned, COLORS.Robux)
+
+		if item.Tag then
+			local tag: TextLabel = newLabel(card, { Position = UDim2.fromOffset(-6, -9), Size = UDim2.fromOffset(0, 24),
+				AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0, BackgroundColor3 = edgeColor(item.Color):Lerp(item.Color, 0.35),
+				Text = item.Tag, Font = DISPLAY_FONT, TextSize = 15, TextStrokeTransparency = 0, ZIndex = 3 })
+			create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tag)
+			round(tag, 6)
+			outline(tag, COLORS.Stroke, 2.5)
+		end
+
+		local blurb = ("<b>%s</b>  ·  %s"):format(fullName, SHOP_BLURBS[item.Key] or "")
+		card.MouseEnter:Connect(function()
+			shopInfo.Text = blurb
+		end)
+		buy.SelectionGained:Connect(function()
+			shopInfo.Text = blurb
+		end)
 	end
 
-	local grid = Shard.Inset.new({ family = "cyan", size = UDim2.new(1, -196, 1, -72), parent = body, scroll = true })
-	grid.Root.Position = UDim2.fromOffset(196, 72)
-	shopGrid = grid.Body :: ScrollingFrame
-	if grid.Layout then
-		grid.Layout:Destroy()
-	end
-	local cardSize: Vector2 = Shard.Card.size("sm")
-	create("UIGridLayout", { CellSize = UDim2.fromOffset(cardSize.X, cardSize.Y), CellPadding = UDim2.fromOffset(18, 26),
-		SortOrder = Enum.SortOrder.LayoutOrder }, shopGrid)
-
-	panel.Root.Parent = gui
-end
-
-local function buildShop()
-	if Shard then
-		buildShardShop()
-		return
-	end
-	local gui = newLayer("RiftShop", 31, false)
-	newScrim(gui)
-	shopFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.54),
-		Size = UDim2.fromOffset(900, 610), BackgroundColor3 = WINDOW_COLORS.Shop, Visible = false })
-
-	-- Header: title, wallet pills and the close button.
-	local header: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 72), BackgroundColor3 = headerColor(WINDOW_COLORS.Shop) },
-		shopFrame)
-	round(header, 14)
-	topLit(header, 0.8)
-	newLabel(header, { Position = UDim2.fromOffset(22, 0), Size = UDim2.new(0.5, 0, 1, 0), Text = "🔮 Shop",
-		Font = DISPLAY_FONT, TextSize = 36, TextStrokeTransparency = 0 })
-	local right: Frame = create("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
-		Size = UDim2.fromOffset(0, 52), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1 }, header)
-	local rightLayout = list(right, Enum.FillDirection.Horizontal, 10)
-	rightLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-	for order, key in { "RiftDust", "RebirthSpark" } do
-		local pill: Frame = create("Frame", { Size = UDim2.fromOffset(0, 44), AutomaticSize = Enum.AutomaticSize.X,
-			BackgroundColor3 = Color3.fromRGB(70, 80, 125), LayoutOrder = order }, right)
-		round(pill, 10)
-		outline(pill, COLORS.Stroke, 3)
-		topLit(pill, 0.75)
-		create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 12) }, pill)
-		local row = list(pill, Enum.FillDirection.Horizontal, 6)
-		row.VerticalAlignment = Enum.VerticalAlignment.Center
-		newLabel(pill, { Size = UDim2.fromOffset(26, 30), Text = currencyIcon(key), TextSize = 22, LayoutOrder = 1,
-			TextStrokeTransparency = 1 })
-		shopWallet[key] = newLabel(pill, { Size = UDim2.fromOffset(0, 30), AutomaticSize = Enum.AutomaticSize.X, Text = "0",
-			Font = DISPLAY_FONT, TextSize = 22, TextStrokeTransparency = 0, LayoutOrder = 2 })
-	end
-	newButton(right, "X", COLORS.Bad, closeStation, { Size = UDim2.fromOffset(52, 52), TextSize = 30, LayoutOrder = 3 })
-
-	-- Category tabs.
-	local sidebar: Frame = create("Frame", { Position = UDim2.fromOffset(16, 90), Size = UDim2.new(0, 180, 1, -106),
-		BackgroundTransparency = 1 }, shopFrame)
-	list(sidebar, Enum.FillDirection.Vertical, 12)
-	for order, name in SHOP_TABS do
-		shopTabs[name] = newButton(sidebar, name, Color3.fromRGB(84, 92, 140), function()
-			shopTab = name
-			shopGrid.CanvasPosition = Vector2.zero
-			renderShop()
-		end, { Size = UDim2.new(1, 0, 0, 54), TextSize = 22, LayoutOrder = order })
+	renderShop = function()
+		local data = profile
+		if data then
+			local prefix = function(key: string): string
+				return if Shard then currencyIcon(key) .. " " else ""
+			end
+			shopWallet.RiftDust.Text = prefix("RiftDust") .. formatNumber(tonumber(data.RiftDust) or 0)
+			shopWallet.RebirthSpark.Text = prefix("RebirthSpark") .. formatNumber(tonumber(data.RebirthSparksAvailable) or 0)
+		end
+		for name, button in shopTabs do
+			local selectedColor = if Shard then COLORS.Gold else Color3.fromRGB(95, 210, 255) -- cyan would vanish on the cyan panel
+			setEnabled(button, true, if name == shopTab then selectedColor else Color3.fromRGB(84, 92, 140))
+		end
+		shopInfo.Text = SHOP_TAB_HINTS[shopTab] or ""
+		local scroll = shopGrid.CanvasPosition
+		clearGuiChildren(shopGrid)
+		local order = 0
+		for _, item in SHOP_ITEMS do
+			if table.find(item.Tabs, shopTab) then
+				order += 1
+				if Shard then
+					buildShardShopCard(item, order)
+				else
+					buildShopCard(item, order)
+				end
+			end
+		end
+		shopGrid.CanvasPosition = scroll
 	end
 
-	-- Hover info bar and the card grid.
-	local infoBar: Frame = create("Frame", { Position = UDim2.fromOffset(212, 90), Size = UDim2.new(1, -228, 0, 48),
-		BackgroundColor3 = Color3.fromRGB(10, 14, 26) }, shopFrame)
-	round(infoBar, 10)
-	outline(infoBar, COLORS.Stroke, 2)
-	shopInfo = newLabel(infoBar, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 1, 0), TextSize = 16,
-		TextColor3 = COLORS.Muted, TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd })
+	local function buildShardShop()
+		local gui = newLayer("RiftShop", 31, false)
+		newScrim(gui)
+		local panel = Shard.Panel.new({ title = "🔮 Shop", family = "cyan", width = 1000, height = 620, headHeight = 80 })
+		shopFrame = panel.Root :: Frame
+		shopFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+		shopFrame.Position = UDim2.fromScale(0.5, 0.5)
+		shopFrame.Visible = false
+		panel.Title.TextSize = 32
 
-	shopGrid = create("ScrollingFrame", {
-		Position = UDim2.fromOffset(212, 150),
-		Size = UDim2.new(1, -228, 1, -166),
-		BackgroundColor3 = insetColor(WINDOW_COLORS.Shop),
-		BorderSizePixel = 0,
-		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		ScrollBarThickness = 6,
-		ScrollBarImageColor3 = Color3.fromRGB(120, 220, 255),
-	}, shopFrame)
-	round(shopGrid, 12)
-	outline(shopGrid, COLORS.Stroke, 3)
-	create("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 18),
-		PaddingBottom = UDim.new(0, 16) }, shopGrid)
-	create("UIGridLayout", { CellSize = UDim2.fromOffset(148, 214), CellPadding = UDim2.fromOffset(14, 20),
-		SortOrder = Enum.SortOrder.LayoutOrder }, shopGrid)
+		for order, key in { "RiftDust", "RebirthSpark" } do
+			local chip = Shard.Chip.new({ text = currencyIcon(key) .. " 0", variant = "sm", family = "slate", static = true,
+				width = 140, parent = panel.Tools })
+			chip.Root.LayoutOrder = order
+			shopWallet[key] = chip.Label
+		end
+		Shard.IconButton.new({ icon = Shard.Icons.Close, variant = "sm", family = "red", parent = panel.Tools,
+			onClick = closeStation }).Root.LayoutOrder = 3
+
+		local body = panel.Body :: Frame
+		local sidebar: Frame = create("Frame", { Size = UDim2.new(0, 180, 1, 0), BackgroundTransparency = 1 }, body)
+		list(sidebar, Enum.FillDirection.Vertical, 12)
+		for order, name in SHOP_TABS do
+			shopTabs[name] = newButton(sidebar, name, Color3.fromRGB(84, 92, 140), function()
+				shopTab = name
+				shopGrid.CanvasPosition = Vector2.zero
+				renderShop()
+			end, { Size = UDim2.new(1, 0, 0, 54), TextSize = 22, LayoutOrder = order })
+		end
+
+		local infoBar = Shard.Inset.new({ family = "cyan", size = UDim2.new(1, -196, 0, 58), parent = body, scroll = false })
+		infoBar.Root.Position = UDim2.fromOffset(196, 0)
+		shopInfo = newLabel(infoBar.Body, { Size = UDim2.fromScale(1, 1), TextSize = 17, TextColor3 = COLORS.Muted,
+			TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd })
+		-- The inset's padding is tuned for lists; a one-line strip needs less.
+		local infoPad = infoBar.Body:FindFirstChildOfClass("UIPadding")
+		if infoPad then
+			infoPad.PaddingTop = UDim.new(0, 6)
+			infoPad.PaddingBottom = UDim.new(0, 6)
+		end
+
+		local grid = Shard.Inset.new({ family = "cyan", size = UDim2.new(1, -196, 1, -72), parent = body, scroll = true })
+		grid.Root.Position = UDim2.fromOffset(196, 72)
+		shopGrid = grid.Body :: ScrollingFrame
+		if grid.Layout then
+			grid.Layout:Destroy()
+		end
+		local cardSize: Vector2 = Shard.Card.size("sm")
+		create("UIGridLayout", { CellSize = UDim2.fromOffset(cardSize.X, cardSize.Y), CellPadding = UDim2.fromOffset(18, 26),
+			SortOrder = Enum.SortOrder.LayoutOrder }, shopGrid)
+
+		panel.Root.Parent = gui
+	end
+
+	buildShop = function()
+		if Shard then
+			buildShardShop()
+			return
+		end
+		local gui = newLayer("RiftShop", 31, false)
+		newScrim(gui)
+		shopFrame = newPanel(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.54),
+			Size = UDim2.fromOffset(900, 610), BackgroundColor3 = WINDOW_COLORS.Shop, Visible = false })
+
+		-- Header: title, wallet pills and the close button.
+		local header: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, 72), BackgroundColor3 = headerColor(WINDOW_COLORS.Shop) },
+			shopFrame)
+		round(header, 14)
+		topLit(header, 0.8)
+		newLabel(header, { Position = UDim2.fromOffset(22, 0), Size = UDim2.new(0.5, 0, 1, 0), Text = "🔮 Shop",
+			Font = DISPLAY_FONT, TextSize = 36, TextStrokeTransparency = 0 })
+		local right: Frame = create("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
+			Size = UDim2.fromOffset(0, 52), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1 }, header)
+		local rightLayout = list(right, Enum.FillDirection.Horizontal, 10)
+		rightLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		for order, key in { "RiftDust", "RebirthSpark" } do
+			local pill: Frame = create("Frame", { Size = UDim2.fromOffset(0, 44), AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundColor3 = Color3.fromRGB(70, 80, 125), LayoutOrder = order }, right)
+			round(pill, 10)
+			outline(pill, COLORS.Stroke, 3)
+			topLit(pill, 0.75)
+			create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 12) }, pill)
+			local row = list(pill, Enum.FillDirection.Horizontal, 6)
+			row.VerticalAlignment = Enum.VerticalAlignment.Center
+			newLabel(pill, { Size = UDim2.fromOffset(26, 30), Text = currencyIcon(key), TextSize = 22, LayoutOrder = 1,
+				TextStrokeTransparency = 1 })
+			shopWallet[key] = newLabel(pill, { Size = UDim2.fromOffset(0, 30), AutomaticSize = Enum.AutomaticSize.X, Text = "0",
+				Font = DISPLAY_FONT, TextSize = 22, TextStrokeTransparency = 0, LayoutOrder = 2 })
+		end
+		newButton(right, "X", COLORS.Bad, closeStation, { Size = UDim2.fromOffset(52, 52), TextSize = 30, LayoutOrder = 3 })
+
+		-- Category tabs.
+		local sidebar: Frame = create("Frame", { Position = UDim2.fromOffset(16, 90), Size = UDim2.new(0, 180, 1, -106),
+			BackgroundTransparency = 1 }, shopFrame)
+		list(sidebar, Enum.FillDirection.Vertical, 12)
+		for order, name in SHOP_TABS do
+			shopTabs[name] = newButton(sidebar, name, Color3.fromRGB(84, 92, 140), function()
+				shopTab = name
+				shopGrid.CanvasPosition = Vector2.zero
+				renderShop()
+			end, { Size = UDim2.new(1, 0, 0, 54), TextSize = 22, LayoutOrder = order })
+		end
+
+		-- Hover info bar and the card grid.
+		local infoBar: Frame = create("Frame", { Position = UDim2.fromOffset(212, 90), Size = UDim2.new(1, -228, 0, 48),
+			BackgroundColor3 = Color3.fromRGB(10, 14, 26) }, shopFrame)
+		round(infoBar, 10)
+		outline(infoBar, COLORS.Stroke, 2)
+		shopInfo = newLabel(infoBar, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 1, 0), TextSize = 16,
+			TextColor3 = COLORS.Muted, TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd })
+
+		shopGrid = create("ScrollingFrame", {
+			Position = UDim2.fromOffset(212, 150),
+			Size = UDim2.new(1, -228, 1, -166),
+			BackgroundColor3 = insetColor(WINDOW_COLORS.Shop),
+			BorderSizePixel = 0,
+			CanvasSize = UDim2.new(),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollBarThickness = 6,
+			ScrollBarImageColor3 = Color3.fromRGB(120, 220, 255),
+		}, shopFrame)
+		round(shopGrid, 12)
+		outline(shopGrid, COLORS.Stroke, 3)
+		create("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 18),
+			PaddingBottom = UDim.new(0, 16) }, shopGrid)
+		create("UIGridLayout", { CellSize = UDim2.fromOffset(148, 214), CellPadding = UDim2.fromOffset(14, 20),
+			SortOrder = Enum.SortOrder.LayoutOrder }, shopGrid)
+	end
 end
 
 local function buildStationPanel()
@@ -2138,6 +2216,11 @@ local function updateTick()
 
 	townMenu.Visible = not inRun()
 
+	-- Run relics and curses under the bars.
+	local runInfo = if inRun() then StationPanels.RunInfoText() else ""
+	runInfoLabel.Visible = runInfo ~= ""
+	runInfoLabel.Text = runInfo
+
 	local combo = player:GetAttribute("Combo")
 	comboLabel.Visible = inRun() and type(combo) == "number" and combo >= 2
 	if comboLabel.Visible then
@@ -2178,6 +2261,7 @@ function UIController.Init()
 	startRunFunction = Remotes.GetFunction("StartRun")
 	stationDataFunction = Remotes.GetFunction("GetStationData")
 
+
 	pcall(function()
 		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false) -- the HUD draws its own HP bar
 	end)
@@ -2189,6 +2273,28 @@ function UIController.Init()
 	buildStationPanel()
 	buildShop()
 	buildTownMenu()
+	-- StationPanels draws with UIController's own helpers, so every window looks the same.
+	StationPanels.Init({
+		create = create, newLabel = newLabel, round = round, outline = outline, topLit = topLit, pad = pad, list = list,
+		newButton = newButton, setEnabled = setEnabled, newBar = newBar, setBar = setBar, section = section,
+		paragraph = paragraph, currencyIcon = currencyIcon, formatNumber = formatNumber, toRoman = toRoman,
+		inRun = inRun, newPanel = newPanel, newLayer = newLayer, COLORS = COLORS, DISPLAY_FONT = DISPLAY_FONT,
+		renderStation = function()
+			renderStation()
+		end,
+		profile = function(): Payload?
+			return profile
+		end,
+		stationData = function(): any
+			return stationData
+		end,
+		content = function(): ScrollingFrame
+			return stationContent
+		end,
+		liveMastery = function(): any
+			return liveMastery
+		end,
+	})
 
 	updateScale()
 	local function watchCamera()
@@ -2205,6 +2311,29 @@ function UIController.Init()
 	Remotes.GetEvent("RunStateChanged").OnClientEvent:Connect(onRunState)
 	Remotes.GetEvent("UpgradeOffer").OnClientEvent:Connect(onUpgradeOffer)
 	Remotes.GetEvent("OpenStation").OnClientEvent:Connect(onOpenStation)
+	Remotes.GetEvent("Celebrate").OnClientEvent:Connect(StationPanels.Celebrate)
+	Remotes.GetEvent("MasteryUpdated").OnClientEvent:Connect(function(data: any)
+		if type(data) ~= "table" or type(data.Weapon) ~= "string" then
+			return
+		end
+		liveMastery = { Weapon = data.Weapon, Level = tonumber(data.Level) or 1, XP = tonumber(data.XP) or 0,
+			Paragon = tonumber(data.Paragon) or 0 }
+		refreshMasteryBar()
+		if openStation == "Inventory" or openStation == "LegionHall" then
+			renderStation()
+		end
+	end)
+
+	-- I / B (or the gamepad's Select / D-pad down) open the Bag anywhere.
+	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+		if processed or UserInputService:GetFocusedTextBox() then
+			return
+		end
+		local key = input.KeyCode
+		if key == Enum.KeyCode.I or key == Enum.KeyCode.B or key == Enum.KeyCode.ButtonSelect or key == Enum.KeyCode.DPadDown then
+			toggleInventory()
+		end
+	end)
 	Remotes.GetEvent("Notify").OnClientEvent:Connect(function(message: any)
 		if type(message) == "string" then
 			toast(message)
@@ -2228,6 +2357,8 @@ function UIController.Init()
 			renderStation()
 		elseif name == "RunId" and player:GetAttribute("RunId") ~= nil then
 			closeStation()
+		elseif (name == "RunRelics" or name == "RunCurses" or string.sub(name, 1, 3) == "Has") and openStation ~= nil then
+			renderStation() -- relic / curse lists and pass-granted slots
 		end
 	end)
 

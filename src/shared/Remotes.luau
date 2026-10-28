@@ -25,6 +25,11 @@ local EVENTS = {
 	"CombatFx", -- S->C: projectile / telegraph / burst / shake cosmetics for the run's players
 	"DamageNumber", -- S->C: batched damage numbers { Pos, Amount, Crit, Lines, Kind, Owner }
 	"Notify", -- S->C: toast message
+	"LoadoutAction", -- C->S: { Action, ... } Blacksmith unlocks, weapon / Link Skill / Starting Relic equips (InventoryService)
+	"StarForce", -- C->S: { Relic, Safeguard } one Star-Force attempt at the Star-Forge (RelicService)
+	"ClaimQuest", -- C->S: quest id to claim at the Quest Board (QuestService)
+	"MasteryUpdated", -- S->C: { Weapon, Level, XP, Paragon, Required, LevelUp?, LinkTier? } after Mastery XP is awarded
+	"Celebrate", -- S->C: { Kind = "Relic" | "Mastery" | "Quest", Title, Body, Icon, Color } big centre-screen banner
 }
 
 local FUNCTIONS = {

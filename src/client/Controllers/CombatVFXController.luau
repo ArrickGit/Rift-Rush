@@ -17,7 +17,12 @@
 --   Swing{Owner,Weapon,Style,Pos,Facing,Range,Height}  Proj{Id,Style,Pos,Vel,Life,HalfX,HalfY,Owner}  ProjEnd{Id,Pos,Hit}
 --   ProjReflect{Id,Pos,Vel}  Burst{Pos,Radius,Style,Owner}  Telegraph{Pos,Size,Duration,Style}
 --   Sweep{Pos,HalfX,Style,Duration}  Chain{From,To,Owner}  Zone{Pos,HalfX,HalfY,Duration,Owner}
---   Shake{Intensity,Duration}  Roar{Pos}
+--   Shake{Intensity,Duration}  Roar{Pos}  Pillar{Pos,HalfX,Height,Owner}  ProjRedirect{Id,Pos,Vel}
+--   CardDraw{Card,Pos,Owner}  Summon{Id,Owner,Offset,Duration,Style}  SummonEnd{Id}
+--   SelfLaunch{Speed} / PoisonBounce{Speed} (sent only to the player they move; the client owns its physics)
+--
+-- Also drawn here: Hungry Coin orbit coins around anyone whose "RunRelics" attribute lists REL_04, and a quick
+-- arm-swing on every attack (the right shoulder Motor6D is overridden for a moment after the Animator runs).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -57,8 +62,29 @@ local STYLE_COLORS: { [string]: Color3 } = {
 	Danger = Color3.fromRGB(255, 65, 75),
 	Warn = Color3.fromRGB(255, 175, 65),
 	Chain = Color3.fromRGB(150, 235, 255),
+	Arrow = Color3.fromRGB(170, 255, 150),
+	Card = Color3.fromRGB(255, 225, 110),
+	Spirit = Color3.fromRGB(205, 150, 255),
+	Lightning = Color3.fromRGB(255, 245, 120),
+	Punch = Color3.fromRGB(255, 130, 175),
+	Finisher = Color3.fromRGB(255, 80, 140),
+	Smash = Color3.fromRGB(255, 190, 80),
+	Pulse = Color3.fromRGB(210, 140, 255),
+	Pillar = Color3.fromRGB(176, 136, 96),
+	Dragon = Color3.fromRGB(255, 120, 40),
+	Phoenix = Color3.fromRGB(255, 150, 50),
+	Frost = Color3.fromRGB(150, 225, 255),
 	Default = Color3.fromRGB(235, 240, 255),
 }
+
+local CARD_COLORS: { [string]: Color3 } = {
+	Red = Color3.fromRGB(255, 80, 80),
+	Blue = Color3.fromRGB(90, 160, 255),
+	Gold = Color3.fromRGB(255, 210, 70),
+}
+local CARD_TEXT: { [string]: string } = { Red = "♥ RED BLAST", Blue = "♠ BLUE -2s Q", Gold = "♦ GOLD +15 DUST" }
+local SWING_SECONDS = 0.22
+local ORBIT_RADIUS = 4.2
 
 local NUMBER_STYLES: { [string]: { Color: Color3, Size: number } } = {
 	Hit = { Color = Color3.fromRGB(255, 255, 255), Size = 26 },
@@ -68,6 +94,8 @@ local NUMBER_STYLES: { [string]: { Color: Color3, Size: number } } = {
 	Hurt = { Color = Color3.fromRGB(255, 85, 85), Size = 30 },
 	Reflect = { Color = Color3.fromRGB(150, 255, 120), Size = 40 },
 	Shadow = { Color = Color3.fromRGB(205, 175, 255), Size = 19 },
+	Poison = { Color = Color3.fromRGB(140, 255, 90), Size = 30 },
+	Shield = { Color = Color3.fromRGB(150, 210, 255), Size = 22 },
 }
 
 type Effect = {
@@ -99,8 +127,14 @@ type NumberSlot = {
 	Opacity: number,
 }
 
+type SummonVisual = { Model: Model, Owner: number, Offset: Vector3, Expires: number, Pos: Vector3 }
+
 local CombatVFXController = {}
 
+local summonVisuals: { [number]: SummonVisual } = {}
+local orbitCoins: { [Player]: { Part } } = {}
+local swingAnims: { [Model]: number } = {} -- character -> swing start time
+local vignette: Frame? = nil
 local fxFolder: Folder
 local numberFolder: Folder
 local partPool: { Part } = {}
@@ -189,7 +223,11 @@ end
 local function spawnSwing(style: string, color: Color3, pos: Vector3, facing: number, range: number, owner: number)
 	local opacity = opacityOf(owner)
 	local origin = pos + Vector3.new(0, 0.5, 0)
-	if style == "Stab" then
+	if style == "Pulse" then
+		spawnBurst(origin + Vector3.new(facing * range * 0.45, 0, 0), range * 0.55, "Pulse", owner)
+		return
+	end
+	if style == "Stab" or style == "Punch" or style == "Finisher" then
 		local part = acquirePart(Enum.PartType.Block, Vector3.new(range, 0.7, 1.4), CFrame.new(origin), color, throttled(0.1, opacity))
 		addEffect(0.14, owner, function(alpha: number)
 			local length = range * (0.4 + 0.6 * math.min(1, alpha * 2.5))
@@ -292,7 +330,15 @@ end
 -- Projectiles ---------------------------------------------------------------------------------------------------
 
 local function projectileShape(style: string, halfX: number, halfY: number): (Enum.PartType, Vector3)
-	if style == "Fireball" then
+	if style == "Arrow" then
+		return Enum.PartType.Block, Vector3.new(2.6, 0.22, 0.22)
+	elseif style == "Lightning" then
+		return Enum.PartType.Block, Vector3.new(2.2, 0.32, 0.32)
+	elseif style == "Card" then
+		return Enum.PartType.Block, Vector3.new(1.3, 0.85, 0.08)
+	elseif style == "Spirit" then
+		return Enum.PartType.Ball, Vector3.one * 1.1
+	elseif style == "Fireball" then
 		return Enum.PartType.Ball, Vector3.one * (halfX * 2.4)
 	elseif style == "Boulder" then
 		return Enum.PartType.Ball, Vector3.one * (halfX * 2)
@@ -336,8 +382,10 @@ local function stepProjectiles(dt: number, now: number)
 		end
 		visual.Pos += visual.Vel * dt
 		local rotation = CFrame.identity
-		if visual.Style == "Blade" then
+		if visual.Style == "Blade" or visual.Style == "Arrow" or visual.Style == "Lightning" then
 			rotation = CFrame.Angles(0, 0, math.atan2(visual.Vel.Y, visual.Vel.X))
+		elseif visual.Style == "Card" then
+			rotation = CFrame.Angles(0, (now - visual.Born) * 14, math.atan2(visual.Vel.Y, visual.Vel.X))
 		elseif visual.Style == "Boulder" then
 			rotation = CFrame.Angles(0, 0, -visual.Dir * (now - visual.Born) * 7)
 		end
@@ -438,7 +486,8 @@ local function showNumber(entry: { [string]: any })
 	local kind = if type(entry.Kind) == "string" then entry.Kind else "Hit"
 	local amount = if type(entry.Amount) == "number" then entry.Amount else 0
 	local pos = entry.Pos :: Vector3
-	local opacity = if kind == "Hurt" then 1 else opacityOf(owner)
+	local selfHurt = kind == "Hurt" or kind == "Poison" or kind == "Shield"
+	local opacity = if selfHurt then 1 else opacityOf(owner)
 
 	local slot = acquireSlot()
 	slot.Active = true
@@ -451,8 +500,10 @@ local function showNumber(entry: { [string]: any })
 	local isCrit = entry.Crit == true
 	local style = if isCrit then NUMBER_STYLES.Crit else (NUMBER_STYLES[kind] or NUMBER_STYLES.Hit)
 	local text = formatNumber(amount)
-	if kind == "Hurt" then
+	if kind == "Hurt" or kind == "Poison" then
 		text = "-" .. text
+	elseif kind == "Shield" then
+		text = "🛡 " .. text
 	elseif isCrit then
 		text ..= "!"
 	end
@@ -500,6 +551,221 @@ local function stepNumbers(now: number)
 	end
 end
 
+-- Weapon extras ------------------------------------------------------------------------------------------------
+
+-- Seismic Tremor: a rock pillar bursts out of the floor, holds, then sinks back.
+local function spawnPillar(pos: Vector3, halfX: number, height: number, owner: number)
+	local opacity = opacityOf(owner)
+	local part = acquirePart(Enum.PartType.Block, Vector3.new(halfX * 2, height, 6), CFrame.new(pos - Vector3.new(0, height / 2, 0)),
+		colorOf("Pillar"), throttled(0, opacity))
+	part.Material = Enum.Material.Rock
+	local cap = acquirePart(Enum.PartType.Block, Vector3.new(halfX * 2 + 0.4, 0.5, 6.4), CFrame.new(pos), colorOf("Smash"), throttled(0.1, opacity))
+	addEffect(0.7, owner, function(alpha: number)
+		local rise = if alpha < 0.18 then alpha / 0.18 elseif alpha > 0.7 then 1 - (alpha - 0.7) / 0.3 else 1
+		local center = pos + Vector3.new(0, height * (rise - 0.5), 0)
+		part.CFrame = CFrame.new(center)
+		cap.CFrame = CFrame.new(center + Vector3.new(0, height / 2, 0))
+	end, function()
+		part.Material = Enum.Material.Neon
+		releasePart(part)
+		releasePart(cap)
+	end)
+end
+
+-- Loaded Deck: the drawn card flips up over the thrower's head.
+local function spawnCardDraw(card: string, pos: Vector3, owner: number)
+	local color = CARD_COLORS[card] or CARD_COLORS.Gold
+	local part = acquirePart(Enum.PartType.Block, Vector3.new(1.8, 2.6, 0.1), CFrame.new(pos), color, throttled(0, opacityOf(owner)))
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromOffset(170, 30)
+	gui.StudsOffsetWorldSpace = Vector3.new(0, 2.2, 0)
+	gui.AlwaysOnTop = true
+	gui.LightInfluence = 0
+	gui.Parent = part
+	local text = Instance.new("TextLabel")
+	text.Size = UDim2.fromScale(1, 1)
+	text.BackgroundTransparency = 1
+	text.Font = Enum.Font.FredokaOne
+	text.TextSize = 20
+	text.TextColor3 = color
+	text.TextStrokeTransparency = 0
+	text.Text = CARD_TEXT[card] or card
+	text.Parent = gui
+	addEffect(0.9, owner, function(alpha: number)
+		part.CFrame = CFrame.new(pos + Vector3.new(0, alpha * 2.5, 0)) * CFrame.Angles(0, alpha * math.pi * 4, 0)
+		part.Transparency = throttled(math.max(0, alpha - 0.6) / 0.4, opacityOf(owner))
+		text.TextTransparency = math.max(0, alpha - 0.7) / 0.3
+	end, function()
+		gui:Destroy()
+		releasePart(part)
+	end)
+end
+
+local function characterRoot(userId: number): BasePart?
+	local owner = Players:GetPlayerByUserId(userId)
+	local character = owner and owner.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+-- Summoning Bell: a small floating Spirit Fox that trails its owner.
+local function spawnSummon(id: number, owner: number, offset: Vector3, duration: number)
+	local existing = summonVisuals[id]
+	if existing then
+		existing.Model:Destroy()
+	end
+	local color = colorOf("Spirit")
+	local model = Instance.new("Model")
+	model.Name = "SpiritFox"
+	local function piece(size: Vector3, cframe: CFrame, shape: Enum.PartType, tint: Color3): Part
+		local part = Instance.new("Part")
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.CastShadow = false
+		part.Material = Enum.Material.Neon
+		part.Shape = shape
+		part.Size = size
+		part.CFrame = cframe
+		part.Color = tint
+		part.Transparency = throttled(0.15, opacityOf(owner))
+		part.Parent = model
+		return part
+	end
+	local body = piece(Vector3.new(1.6, 1.1, 1.1), CFrame.new(), Enum.PartType.Ball, color)
+	piece(Vector3.new(1, 1, 1), CFrame.new(0.75, 0.35, 0), Enum.PartType.Ball, color:Lerp(Color3.new(1, 1, 1), 0.3))
+	for _, z in { -0.3, 0.3 } do
+		piece(Vector3.new(0.25, 0.6, 0.25), CFrame.new(0.85, 0.95, z) * CFrame.Angles(0, 0, -0.2), Enum.PartType.Block, color)
+	end
+	piece(Vector3.new(1.2, 0.5, 0.5), CFrame.new(-1.05, 0.35, 0) * CFrame.Angles(0, 0, 0.6), Enum.PartType.Ball, Color3.new(1, 1, 1))
+	model.PrimaryPart = body
+	local light = Instance.new("PointLight")
+	light.Color = color
+	light.Range = 8
+	light.Parent = body
+	model.Parent = fxFolder
+	local root = characterRoot(owner)
+	local start = if root then root.Position + offset else Vector3.zero
+	model:PivotTo(CFrame.new(start))
+	summonVisuals[id] = { Model = model, Owner = owner, Offset = offset, Expires = os.clock() + duration + 0.5, Pos = start }
+end
+
+local function removeSummon(id: number)
+	local visual = summonVisuals[id]
+	if visual then
+		spawnBurst(visual.Pos, 1.8, "Spirit", visual.Owner)
+		visual.Model:Destroy()
+		summonVisuals[id] = nil
+	end
+end
+
+local function stepSummons(now: number, dt: number)
+	for id, visual in summonVisuals do
+		local root = characterRoot(visual.Owner)
+		if now >= visual.Expires or not root then
+			removeSummon(id)
+			continue
+		end
+		local target = root.Position + visual.Offset + Vector3.new(0, math.sin(now * 3 + id) * 0.4, 0)
+		visual.Pos = visual.Pos:Lerp(target, math.min(1, dt * 8))
+		local facing = if (target - visual.Pos).X < -0.05 then math.pi else 0
+		visual.Model:PivotTo(CFrame.new(visual.Pos) * CFrame.Angles(0, facing, 0))
+	end
+end
+
+-- Hungry Coin: two golden coins orbiting each player whose run relics include it.
+local function stepOrbits(now: number)
+	for _, other in Players:GetPlayers() do
+		local relics = other:GetAttribute("RunRelics")
+		local hasCoin = type(relics) == "string" and string.find(relics, "REL_04", 1, true) ~= nil
+		local character = other.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		local coins = orbitCoins[other]
+		if not hasCoin or not (root and root:IsA("BasePart")) then
+			if coins then
+				for _, coin in coins do
+					coin:Destroy()
+				end
+				orbitCoins[other] = nil
+			end
+			continue
+		end
+		if not coins then
+			local created: { Part } = {}
+			for _ = 1, 2 do
+				local coin = Instance.new("Part")
+				coin.Shape = Enum.PartType.Cylinder
+				coin.Size = Vector3.new(0.25, 1.3, 1.3)
+				coin.Color = Color3.fromRGB(255, 200, 50)
+				coin.Material = Enum.Material.Neon
+				coin.Anchored = true
+				coin.CanCollide = false
+				coin.CanQuery = false
+				coin.CanTouch = false
+				coin.CastShadow = false
+				coin.Parent = fxFolder
+				table.insert(created, coin)
+			end
+			orbitCoins[other] = created
+			coins = created
+		end
+		for index, coin in coins :: { Part } do
+			local angle = now * 4 + index * math.pi
+			coin.CFrame = CFrame.new(root.Position + Vector3.new(math.cos(angle) * ORBIT_RADIUS, 0.4 + math.sin(now * 3) * 0.3, math.sin(angle) * ORBIT_RADIUS))
+				* CFrame.Angles(0, now * 6, 0)
+		end
+	end
+end
+
+local function flashVignette(color: Color3)
+	local frame = vignette
+	if not frame then
+		return
+	end
+	frame.BackgroundColor3 = color
+	local born = os.clock()
+	addEffect(0.45, localUserId, function(alpha: number)
+		frame.BackgroundTransparency = 0.55 + 0.45 * alpha
+		frame.Visible = true
+	end, function()
+		if os.clock() - born >= 0.44 then
+			frame.Visible = false
+		end
+	end)
+end
+
+local function launchSelf(speed: number)
+	local character = localPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		local velocity = root.AssemblyLinearVelocity
+		root.AssemblyLinearVelocity = Vector3.new(velocity.X, math.max(velocity.Y, speed), 0)
+	end
+end
+
+local function startArmSwing(userId: number)
+	local owner = Players:GetPlayerByUserId(userId)
+	local character = owner and owner.Character
+	if character then
+		swingAnims[character] = os.clock()
+	end
+end
+
+-- Overrides the right shoulder after the Animator has posed it: a fast raise and a downward slash.
+local function stepArmSwings(now: number)
+	for character, started in swingAnims do
+		local t = (now - started) / SWING_SECONDS
+		local shoulder = character:FindFirstChild("RightShoulder", true) or character:FindFirstChild("Right Shoulder", true)
+		if t >= 1 or not character.Parent or not (shoulder and shoulder:IsA("Motor6D")) then
+			swingAnims[character] = nil
+			continue
+		end
+		local angle = if t < 0.3 then 2.3 * (t / 0.3) else 2.3 - 3.0 * ((t - 0.3) / 0.7)
+		shoulder.Transform = shoulder.Transform * CFrame.Angles(angle, 0, 0)
+	end
+end
+
 -- Dispatch -----------------------------------------------------------------------------------------------------
 
 local function handleFx(payload: any)
@@ -511,8 +777,35 @@ local function handleFx(payload: any)
 		local weapon = WeaponConfig.Weapons[payload.Weapon]
 		local color = if weapon then weapon.Accent else colorOf(payload.Style)
 		spawnSwing(payload.Style, color, payload.Pos, payload.Facing, payload.Range, payload.Owner)
+		startArmSwing(payload.Owner)
 	elseif kind == "Proj" then
 		spawnProjectile(payload)
+		if payload.Owner ~= 0 and payload.Owner ~= localUserId and (payload.Style == "Bolt" or payload.Style == "Arrow" or payload.Style == "Card") then
+			startArmSwing(payload.Owner)
+		end
+	elseif kind == "ProjRedirect" then
+		local visual = projVisuals[payload.Id]
+		if visual then
+			visual.Pos = payload.Pos
+			visual.Vel = payload.Vel
+			visual.Born = os.clock()
+			visual.Life = 1
+			spawnBurst(payload.Pos, 1.6, visual.Style, visual.Owner)
+		end
+	elseif kind == "Pillar" then
+		spawnPillar(payload.Pos, payload.HalfX, payload.Height, payload.Owner or 0)
+	elseif kind == "CardDraw" then
+		spawnCardDraw(payload.Card, payload.Pos, payload.Owner or 0)
+	elseif kind == "Summon" then
+		spawnSummon(payload.Id, payload.Owner or 0, payload.Offset or Vector3.new(0, 4, 0), payload.Duration or 12)
+	elseif kind == "SummonEnd" then
+		removeSummon(payload.Id)
+	elseif kind == "SelfLaunch" then
+		launchSelf(payload.Speed or 60)
+	elseif kind == "PoisonBounce" then
+		launchSelf(payload.Speed or 68)
+		flashVignette(Color3.fromRGB(90, 255, 60))
+		Camera25DController.Shake(0.4, 0.2)
 	elseif kind == "ProjEnd" then
 		local visual = projVisuals[payload.Id]
 		if visual and payload.Hit and visual.Style ~= "Fireball" then
@@ -555,6 +848,7 @@ function CombatVFXController.PlaySwing(weaponId: string, facing: number)
 	if not root or not root:IsA("BasePart") or not weapon then
 		return
 	end
+	startArmSwing(localUserId)
 	local profile = weapon.Attack or WeaponConfig.GenericAttack
 	if profile.Kind ~= "Melee" then
 		return -- projectile weapons are drawn from the server's Proj event
@@ -574,6 +868,39 @@ function CombatVFXController.Init()
 		table.insert(freeSlots, createSlot())
 	end
 
+	local vignetteGui = Instance.new("ScreenGui")
+	vignetteGui.Name = "RiftHazardFlash"
+	vignetteGui.IgnoreGuiInset = true
+	vignetteGui.ResetOnSpawn = false
+	vignetteGui.DisplayOrder = 40
+	vignetteGui.Parent = localPlayer:WaitForChild("PlayerGui")
+	local flash = Instance.new("Frame")
+	flash.Size = UDim2.fromScale(1, 1)
+	flash.BorderSizePixel = 0
+	flash.BackgroundTransparency = 1
+	flash.Visible = false
+	flash.Parent = vignetteGui
+	local gradient = Instance.new("UIGradient") -- clear centre, tinted edges
+	gradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.25, 0.85), NumberSequenceKeypoint.new(0.75, 0.85),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	gradient.Parent = flash
+	vignette = flash
+
+	RunService.PreSimulation:Connect(function()
+		stepArmSwings(os.clock())
+	end)
+	Players.PlayerRemoving:Connect(function(other: Player)
+		local coins = orbitCoins[other]
+		if coins then
+			for _, coin in coins do
+				coin:Destroy()
+			end
+			orbitCoins[other] = nil
+		end
+	end)
+
 	Remotes.GetEvent("CombatFx").OnClientEvent:Connect(handleFx)
 	Remotes.GetEvent("DamageNumber").OnClientEvent:Connect(function(batch: any)
 		if type(batch) ~= "table" then
@@ -590,6 +917,8 @@ function CombatVFXController.Init()
 		local now = os.clock()
 		stepProjectiles(dt, now)
 		stepNumbers(now)
+		stepSummons(now, dt)
+		stepOrbits(now)
 		for index = #effects, 1, -1 do
 			local effect = effects[index]
 			local alpha = (now - effect.Born) / effect.Life

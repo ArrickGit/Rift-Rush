@@ -5,9 +5,9 @@
 -- server publishes (AttackInterval / Ability1ReadyAt player attributes) so a held button doesn't spam the remote.
 --
 --   PC: Left Click or J = Attack, Q = Ability 1, Shift/K = Dash (bound by Movement25DController)
---   Controller: X = Attack, LB = Ability 1     Mobile: on-screen Attack / Ability buttons
---
--- Mobile button placement is Roblox's default ContextActionService layout; the Step 6 UI pass owns the final HUD.
+--   Controller: X = Attack, LB/RB = Ability 1     Mobile: MobileControlsController's on-screen buttons call
+--   SetAttackHeld / PressAbility.
+-- Gauntlets punches nudge the local character forward (Lunge); the client owns its physics, so it does that here.
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
@@ -64,6 +64,15 @@ local function tryAttack()
 	local facing = Movement25DController.GetFacing()
 	CombatVFXController.PlaySwing(equippedWeapon, facing)
 	attackRemote:FireServer("Basic", facing)
+
+	local weapon = WeaponConfig.Weapons[equippedWeapon]
+	local lunge = weapon and weapon.Attack and weapon.Attack.Lunge
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if lunge and root and root:IsA("BasePart") then
+		local velocity = root.AssemblyLinearVelocity
+		root.AssemblyLinearVelocity = Vector3.new(facing * math.max(math.abs(velocity.X), lunge), velocity.Y, 0)
+	end
 end
 
 local function tryAbility()
@@ -94,6 +103,18 @@ local function onAbilityAction(_actionName: string, inputState: Enum.UserInputSt
 	return Enum.ContextActionResult.Sink
 end
 
+-- On-screen buttons (MobileControlsController).
+function CombatInputController.SetAttackHeld(held: boolean)
+	attackHeld = held
+	if held then
+		tryAttack()
+	end
+end
+
+function CombatInputController.PressAbility()
+	tryAbility()
+end
+
 local function applyProfile(profile: any)
 	if type(profile) == "table" and type(profile.EquippedWeapon) == "string" then
 		equippedWeapon = profile.EquippedWeapon
@@ -104,11 +125,10 @@ function CombatInputController.Init()
 	attackRemote = Remotes.GetEvent("CombatAttack")
 	dashRemote = Remotes.GetEvent("CombatDash")
 
-	ContextActionService:BindAction(ATTACK_ACTION, onAttackAction, true,
+	ContextActionService:BindAction(ATTACK_ACTION, onAttackAction, false,
 		Enum.UserInputType.MouseButton1, Enum.KeyCode.J, Enum.KeyCode.ButtonX)
-	ContextActionService:SetTitle(ATTACK_ACTION, "Attack")
-	ContextActionService:BindAction(ABILITY_ACTION, onAbilityAction, true, Enum.KeyCode.Q, Enum.KeyCode.ButtonL1)
-	ContextActionService:SetTitle(ABILITY_ACTION, "Skill")
+	ContextActionService:BindAction(ABILITY_ACTION, onAbilityAction, false, Enum.KeyCode.Q, Enum.KeyCode.ButtonL1,
+		Enum.KeyCode.ButtonR1)
 
 	-- Holding the button keeps attacking at the weapon's rate.
 	RunService.Heartbeat:Connect(function()

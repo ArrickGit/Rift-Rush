@@ -1,9 +1,10 @@
 --!strict
 -- ServerScriptService/Server/Services/TownHubService.luau
 -- Builds Haven Outpost (RoomBuilderService.BuildTownHub) and wires each station's ProximityPrompt (Section 5.1).
--- Stations with a UIController panel (PANEL_STATIONS) fire OpenStation { Station, Data }; the panel then acts through
--- the normal validated remotes (StartRun, RequestRebirth, AscensionPurchase, RequestPurchase). Panels refresh their
--- Data through the GetStationData RemoteFunction. Stations without a panel yet just say so.
+-- Every station fires OpenStation { Station, Data } to open its UIController panel; the panel then acts through the
+-- normal validated remotes (StartRun, RequestRebirth, AscensionPurchase, RequestPurchase, LoadoutAction, StarForce,
+-- ClaimQuest). Panels refresh their Data through the GetStationData RemoteFunction (nil for panels that only read
+-- the replicated profile: Blacksmith, Legion Hall, Star-Forge).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,6 +15,8 @@ local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
 local ModelNormalizer = require(Shared:WaitForChild("ModelNormalizer"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local AscensionShopService = require(script.Parent:WaitForChild("AscensionShopService"))
+local LeaderboardService = require(script.Parent:WaitForChild("LeaderboardService"))
+local QuestService = require(script.Parent:WaitForChild("QuestService"))
 local RebirthService = require(script.Parent:WaitForChild("RebirthService"))
 local RoomBuilderService = require(script.Parent:WaitForChild("RoomBuilderService"))
 local RunManagerService = require(script.Parent:WaitForChild("RunManagerService"))
@@ -32,6 +35,11 @@ local PANEL_STATIONS: { [string]: boolean } = {
 	AscensionPedestal = true,
 	SparkSanctum = true,
 	RiftShrine = true,
+	Blacksmith = true,
+	LegionHall = true,
+	StarForge = true,
+	QuestBoard = true,
+	HallOfChampions = true,
 }
 
 local ACTION_TEXT: { [string]: string } = {
@@ -51,8 +59,8 @@ local ACTION_TEXT: { [string]: string } = {
 local DECOR: { { Name: string, X: number, Depth: number, Height: number } } = {
 	{ Name = "Cabinet", X = -150, Depth = 7, Height = 6 },
 	{ Name = "Barrel", X = -140, Depth = 5, Height = 4 },
-	{ Name = "Crate_Wooden", X = -136, Depth = 6, Height = 3.2 },
-	{ Name = "Torch_Metal", X = -108, Depth = 4, Height = 7 },
+	{ Name = "Crate_Wooden", X = -137, Depth = 6, Height = 3.2 },
+	{ Name = "Torch_Metal", X = -104, Depth = 4, Height = 7 },
 	{ Name = "Stall_Cart_Empty", X = -96, Depth = 8, Height = 8 },
 	{ Name = "Bench", X = -80, Depth = 5, Height = 3 },
 	{ Name = "Vase_2", X = -64, Depth = 4, Height = 3.5 },
@@ -67,7 +75,7 @@ local DECOR: { { Name: string, X: number, Depth: number, Height: number } } = {
 	{ Name = "Peg_Rack", X = 62, Depth = 7, Height = 5 },
 	{ Name = "Chest_Wood", X = 98, Depth = 5, Height = 3 },
 	{ Name = "Bucket_Wooden_1", X = 106, Depth = 4, Height = 2.6 },
-	{ Name = "Dummy", X = 116, Depth = 6, Height = 7 },
+	{ Name = "Dummy", X = 112, Depth = 6, Height = 7 },
 	{ Name = "Vase_4", X = 144, Depth = 4, Height = 3.5 },
 	{ Name = "Crate_Metal", X = 150, Depth = 6, Height = 3.4 },
 	{ Name = "Cabinet", X = 162, Depth = 7, Height = 6 },
@@ -89,6 +97,10 @@ local function stationData(player: Player, stationKey: string): any
 		return RebirthService.GetPreview(player)
 	elseif stationKey == "SparkSanctum" then
 		return AscensionShopService.GetShopState(player)
+	elseif stationKey == "QuestBoard" then
+		return QuestService.GetBoard(player)
+	elseif stationKey == "HallOfChampions" then
+		return LeaderboardService.GetBoards(player)
 	end
 	return nil
 end
@@ -104,7 +116,7 @@ local function wireStation(stationKey: string, model: Model)
 	prompt.ObjectText = if look then look.Name else stationKey
 	prompt.ActionText = ACTION_TEXT[stationKey] or "Open"
 	prompt.HoldDuration = 0
-	prompt.MaxActivationDistance = 12
+	prompt.MaxActivationDistance = 18 -- oversized landmarks: trigger comfortably from the front of the dais
 	prompt.RequiresLineOfSight = false
 	prompt.Parent = anchor
 

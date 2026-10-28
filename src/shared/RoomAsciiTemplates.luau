@@ -20,15 +20,21 @@ export type RoomTemplate = {
 	Type: RoomType,
 	Objective: string, -- "{N}" is replaced by the number of enemies to defeat
 	Grid: { string },
-	RisingPoison: number?, -- studs/second the Jump Quest poison climbs (forfeits the bonus chest, never kills)
+	RisingPoison: number?, -- studs/second the Jump Quest acid climbs (it burns and bounces; the exit is at the top)
 }
 
+-- FloorTurf / FloorStone / PlatformTurf / PlatformFrame switch on the high-contrast rule (game.md Section 33.4): the
+-- ground floor is dark emerald turf over slate, every elevated platform is sunlit lime grass in a warm timber frame.
 export type WorldTheme = {
 	Ground: Color3,
 	Cap: Color3,
 	Platform: Color3,
 	Backdrop: Color3,
 	Accent: Color3,
+	FloorTurf: Color3?,
+	FloorStone: Color3?,
+	PlatformTurf: Color3?,
+	PlatformFrame: Color3?,
 }
 
 export type WorldTemplates = {
@@ -92,17 +98,17 @@ add({
 
 add({
 	Id = "MushroomWilds_Room03", Name = "Rising Spores", Type = "Jump",
-	Objective = "Ascend Before the Poison Rises",
+	Objective = "Climb to the portal before the acid rises!",
 	RisingPoison = 0.9,
 	Grid = {
 		"################",
-		"#..............#",
-		"#....C.........#",
+		"#.............E#",
+		"#....C...======#",
 		"#...====.......#",
 		"#.......====...#",
 		"#...====.......#",
 		"#.......====...#",
-		"#S.====.......E#",
+		"#S.====........#",
 		"################",
 	},
 })
@@ -177,17 +183,17 @@ add({
 
 add({
 	Id = "MushroomWilds_Room08", Name = "Spore Spire", Type = "Jump",
-	Objective = "Ascend Before the Poison Rises",
+	Objective = "Climb to the portal before the acid rises!",
 	RisingPoison = 1.2,
 	Grid = {
 		"################",
-		"#..............#",
-		"#.......C......#",
+		"#E.............#",
+		"#=====...C.....#",
 		"#......====....#",
 		"#...====..====.#",
 		"#..............#",
 		"#..............#",
-		"#S.^........^.E#",
+		"#S.^........^..#",
 		"################",
 	},
 })
@@ -237,6 +243,10 @@ RoomAsciiTemplates.Worlds = {
 			Platform = Color3.fromRGB(172, 122, 72),
 			Backdrop = Color3.fromRGB(66, 112, 92),
 			Accent = Color3.fromRGB(255, 210, 120),
+			FloorTurf = Color3.fromRGB(46, 108, 54),
+			FloorStone = Color3.fromRGB(52, 54, 66),
+			PlatformTurf = Color3.fromRGB(118, 222, 78),
+			PlatformFrame = Color3.fromRGB(155, 118, 78),
 		},
 		Sequence = {
 			"MushroomWilds_Room01", "MushroomWilds_Room02", "MushroomWilds_Room03", "MushroomWilds_Room04",
@@ -279,6 +289,10 @@ RoomAsciiTemplates.TownHub = {
 		Platform = Color3.fromRGB(196, 150, 96),
 		Backdrop = Color3.fromRGB(120, 168, 214),
 		Accent = Color3.fromRGB(255, 196, 120),
+		FloorTurf = Color3.fromRGB(62, 138, 70),
+		FloorStone = Color3.fromRGB(122, 102, 86),
+		PlatformTurf = Color3.fromRGB(118, 222, 78),
+		PlatformFrame = Color3.fromRGB(155, 118, 78),
 	},
 	Grid = {
 		"#..............................................#",

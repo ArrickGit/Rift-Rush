@@ -10,6 +10,8 @@ local CombatVFXController = require(Controllers:WaitForChild("CombatVFXControlle
 local CombatInputController = require(Controllers:WaitForChild("CombatInputController"))
 local UIController = require(Controllers:WaitForChild("UIController"))
 local WaypointController = require(Controllers:WaitForChild("WaypointController"))
+local AmbientController = require(Controllers:WaitForChild("AmbientController"))
+local MobileControlsController = require(Controllers:WaitForChild("MobileControlsController"))
 
 -- Each Init runs in its own thread (in this order, up to its first yield), so one controller that yields or
 -- errors can never stop the rest — e.g. the UI and its Town Hub panels — from starting.
@@ -21,6 +23,8 @@ local inits: { { Name: string, Init: () -> () } } = {
 	{ Name = "CombatInputController", Init = CombatInputController.Init },
 	{ Name = "UIController", Init = UIController.Init },
 	{ Name = "WaypointController", Init = WaypointController.Init },
+	{ Name = "AmbientController", Init = AmbientController.Init },
+	{ Name = "MobileControlsController", Init = MobileControlsController.Init },
 }
 for _, entry in inits do
 	task.spawn(function()
