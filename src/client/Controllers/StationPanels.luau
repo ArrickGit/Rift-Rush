@@ -2,7 +2,8 @@
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
 -- The loadout panels UIController shows in its station window (game.md Steps SP-2 / SP-3 / SP-5 / SP-6):
 --   Blacksmith (forge / reactivate weapons), Legion Hall (Mastery & Link Skills), Star-Forge (relic collection,
---   Star-Force, Starting Relics), Quest Board, Hall of Champions and the Bag (Inventory, usable anywhere).
+--   Star-Force, Starting Relics), Hall of Champions and the Bag (Inventory, usable anywhere). The Spark Sanctum and
+--   Quest Board are drawn as scenes by StationScenes and routed through Renderers here.
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards).
 --
 -- UIController owns the window and passes its drawing helpers in as a kit (Init); renderers draw into kit.content()
@@ -18,6 +19,8 @@ local CurseConfig = require(Shared:WaitForChild("CurseConfig"))
 local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local Sfx = require(script.Parent:WaitForChild("Sfx"))
+local StationScenes = require(script.Parent:WaitForChild("StationScenes"))
 
 type Payload = { [string]: any }
 
@@ -27,7 +30,6 @@ local player = Players.LocalPlayer
 local K: any = nil -- UIController's kit, set by Init
 local loadoutRemote: RemoteEvent
 local starForceRemote: RemoteEvent
-local claimQuestRemote: RemoteEvent
 local useSafeguard = false
 
 local celebrateFrame: Frame
@@ -274,37 +276,6 @@ local function renderStarForge()
 	end
 end
 
-local function renderQuestBoard()
-	local board = K.stationData()
-	if type(board) ~= "table" or type(board.Quests) ~= "table" then
-		K.paragraph(1, "Loading…", K.COLORS.Muted)
-		return
-	end
-	local resets = tonumber(board.ResetsIn) or 0
-	K.section(1, ("Daily Quests  ·  new quests in %dh %02dm"):format(resets // 3600, (resets % 3600) // 60))
-	local order = 1
-	local bountyHeader = false
-	for _, quest in board.Quests do
-		if quest.Repeatable and not bountyHeader then
-			bountyHeader = true
-			order += 1
-			K.section(order, "Bounties (repeatable)")
-		end
-		local goal = tonumber(quest.Goal) or 1
-		local progress = math.min(goal, tonumber(quest.Progress) or 0)
-		local done = progress >= goal
-		order += 1
-		local button: RowButton = if quest.Claimed
-			then { Text = "✔ Claimed", Color = K.COLORS.Good, Enabled = false, OnClick = function() end }
-			else { Text = if done then "Claim!" else ("%d%%"):format(math.floor(progress / goal * 100)), Color = K.COLORS.Gold,
-				Enabled = done, OnClick = function()
-					claimQuestRemote:FireServer(quest.Id)
-				end }
-		actionRow(order, ("%s %s"):format(tostring(quest.Icon), tostring(quest.Name)),
-			("Progress %s / %s   ·   Reward %s"):format(K.formatNumber(progress), K.formatNumber(goal), tostring(quest.RewardText)), { button }, 64)
-	end
-end
-
 local MEDALS = { "🥇", "🥈", "🥉" }
 
 local function boardValue(format: string, value: number): string
@@ -512,19 +483,22 @@ StationPanels.Renderers = {
 	Blacksmith = renderBlacksmith,
 	LegionHall = renderLegionHall,
 	StarForge = renderStarForge,
-	QuestBoard = renderQuestBoard,
+	QuestBoard = StationScenes.Renderers.QuestBoard,
+	SparkSanctum = StationScenes.Renderers.SparkSanctum,
 	HallOfChampions = renderHallOfChampions,
 	Inventory = renderInventory,
 } :: { [string]: () -> () }
 
 StationPanels.Celebrate = celebrate
+StationPanels.Sfx = Sfx
+StationPanels.Reset = StationScenes.Reset
 
 function StationPanels.Init(kit: any)
 	K = kit
 	loadoutRemote = Remotes.GetEvent("LoadoutAction")
 	starForceRemote = Remotes.GetEvent("StarForce")
-	claimQuestRemote = Remotes.GetEvent("ClaimQuest")
 	buildCelebration()
+	StationScenes.Init(kit)
 end
 
 return StationPanels

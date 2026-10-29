@@ -82,6 +82,9 @@ function AscensionShopService.Purchase(player: Player, nodeId: string): (boolean
 	if not profile or not node then
 		return false, "Unknown upgrade"
 	end
+	if node.ComingSoon then
+		return false, node.Name .. " is coming soon"
+	end
 	if not isNodeUnlocked(nodeId, node.Tier, profile.RebirthTier) then
 		return false, node.Name .. " is locked: rebirth further to unlock it"
 	end

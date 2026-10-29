@@ -27,7 +27,6 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
-local AscensionShopConfig = require(Shared:WaitForChild("AscensionShopConfig"))
 local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
 local FormulaEngine = require(Shared:WaitForChild("FormulaEngine"))
 local MonetizationConfig = require(Shared:WaitForChild("MonetizationConfig"))
@@ -119,13 +118,6 @@ local WINDOW_COLORS = {
 	QuestBoard = Color3.fromHex("c99a2e"),
 	HallOfChampions = Color3.fromHex("d8a520"),
 	Inventory = Color3.fromHex("4a7fd0"),
-}
-
-local TIER_NAMES: { [number]: string } = {
-	[1] = "Initiate Ascendant",
-	[2] = "Rift Weaver",
-	[3] = "Sovereign of the Rift",
-	[4] = "Transcendent",
 }
 
 local LEAVE_MESSAGES: { [string]: string } = {
@@ -220,8 +212,6 @@ local upgradeChosenRemote: RemoteEvent
 local anchorRemote: RemoteEvent
 local defeatRemote: RemoteEvent
 local rebirthRemote: RemoteEvent
-local ascensionPurchaseRemote: RemoteEvent
-local ascensionRespecRemote: RemoteEvent
 local purchaseRemote: RemoteEvent
 local startRunFunction: RemoteFunction
 local stationDataFunction: RemoteFunction
@@ -305,7 +295,6 @@ local stationRefreshToken = 0
 local selectedWorld = 1
 local selectedCorruption = 0
 local startingRun = false
-local respecArmed = false
 
 -- Helpers --------------------------------------------------------------------------------------------------------
 
@@ -464,6 +453,7 @@ local function newFlatButton(parent: Instance, label: string, color: Color3, onC
 	addPressFeedback(button)
 	button.Activated:Connect(function()
 		if button:GetAttribute("Enabled") ~= false then
+			StationPanels.Sfx.Play("UI_Click")
 			onClick()
 		end
 	end)
@@ -517,6 +507,7 @@ local function newButton(parent: Instance, label: string, color: Color3, onClick
 	root:SetAttribute("Enabled", true)
 	root.MouseButton1Click:Connect(function()
 		if root:GetAttribute("Enabled") ~= false then
+			StationPanels.Sfx.Play("UI_Click")
 			onClick()
 		end
 	end)
@@ -1446,9 +1437,12 @@ local function unlockedTierFor(world: number): number?
 end
 
 local function closeStation()
+	if openStation then
+		StationPanels.Sfx.Play("UI_PanelClose", 0.4)
+	end
 	openStation = nil
 	stationData = nil
-	respecArmed = false
+	StationPanels.Reset()
 	stationFrame.Visible = false
 	shopFrame.Visible = false
 	for _, scrim in windowScrims do
@@ -1618,70 +1612,10 @@ local function renderPedestal()
 		end)
 end
 
-local function renderSanctum()
-	local data = profile
-	section(1, ("%s %s Rebirth Sparks available"):format(currencyIcon("RebirthSpark"),
-		formatNumber(if data then data.RebirthSparksAvailable or 0 else 0)))
-	local nodes = stationData
-	if type(nodes) ~= "table" then
-		paragraph(2, "Loading…", COLORS.Muted)
-		return
-	end
-	local sparks = if data then tonumber(data.RebirthSparksAvailable) or 0 else 0
-	local order = 2
-	local lastTier = 0
-	for _, state in nodes do
-		local node = AscensionShopConfig.GetNode(state.Id)
-		if node then
-			local tier = if node.FlatCost then -1 else node.Tier -- the infinite sinks get their own heading
-			if tier ~= lastTier then
-				lastTier = tier
-				order += 1
-				local required = AscensionShopConfig.TierUnlockRebirth[node.Tier] or 0
-				section(order, if tier == -1
-					then "Infinite Sinks (Rebirth XI+)"
-					else ("Tier %d · %s (Rebirth %s)"):format(tier, TIER_NAMES[tier] or "", toRoman(required)))
-			end
-			local level = tonumber(state.Level) or 0
-			local maxText = if node.FlatCost then "∞" else tostring(node.MaxLevel)
-			local cost = tonumber(state.NextCost)
-			local buttonText: string, enabled: boolean
-			if not state.Unlocked then
-				buttonText, enabled = "🔒 Locked", false
-			elseif not cost then
-				buttonText, enabled = "MAX", false
-			else
-				buttonText, enabled = ("Buy  ·  %d %s"):format(cost, currencyIcon("RebirthSpark")), sparks >= cost
-			end
-			order += 1
-			itemRow(order, ("%s  <font color='#%s'>Lv. %d/%s</font>"):format(node.Name, COLORS.Muted:ToHex(), level, maxText),
-				("%s (%s)"):format(node.Desc, node.EffectPerLevel), buttonText, COLORS.Accent, enabled, function()
-					ascensionPurchaseRemote:FireServer(node.Id)
-				end)
-		end
-	end
-
-	order += 1
-	section(order, "Respec")
-	order += 1
-	paragraph(order, "Refund every spent Spark for free and rebuild your tree.", COLORS.Muted)
-	order += 1
-	newButton(stationContent, if respecArmed then "Click again to confirm respec" else "↺ Respec Ascension Tree",
-		if respecArmed then COLORS.Bad else COLORS.PanelLight, function()
-			if respecArmed then
-				respecArmed = false
-				ascensionRespecRemote:FireServer()
-			else
-				respecArmed = true
-			end
-			renderStation()
-		end, { Size = UDim2.new(1, 0, 0, 40), LayoutOrder = order })
-end
-
 local STATION_RENDERERS: { [string]: () -> () } = {
 	RiftGate = renderRiftGate,
 	AscensionPedestal = renderPedestal,
-	SparkSanctum = renderSanctum,
+	SparkSanctum = StationPanels.Renderers.SparkSanctum,
 	RiftShrine = function()
 		renderShop()
 	end,
@@ -1754,8 +1688,9 @@ local function onOpenStation(payload: any)
 		return
 	end
 	if openStation ~= key then
-		respecArmed = false
+		StationPanels.Reset()
 		stationContent.CanvasPosition = Vector2.zero
+		StationPanels.Sfx.Play(if key == "QuestBoard" then "Quest_BoardOpen" elseif key == "Inventory" then "Bag_Open" else "UI_PanelOpen", 0.5)
 	end
 	openStation = key
 	stationData = payload.Data
@@ -2106,7 +2041,7 @@ local function buildStationPanel()
 	local gui = newLayer("RiftStations", 30, false)
 	newScrim(gui)
 	stationWindow = newWindow(gui, WINDOW_COLORS.RiftGate, { AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.54), Size = UDim2.fromOffset(660, 540), Visible = false }, closeStation)
+		Position = UDim2.fromScale(0.5, 0.53), Size = UDim2.fromOffset(700, 600), Visible = false }, closeStation)
 	stationFrame = stationWindow.Frame
 	stationTitle = stationWindow.Title
 	if Shard then
@@ -2255,8 +2190,6 @@ function UIController.Init()
 	anchorRemote = Remotes.GetEvent("AnchorDecision")
 	defeatRemote = Remotes.GetEvent("DefeatChoice")
 	rebirthRemote = Remotes.GetEvent("RequestRebirth")
-	ascensionPurchaseRemote = Remotes.GetEvent("AscensionPurchase")
-	ascensionRespecRemote = Remotes.GetEvent("AscensionRespec")
 	purchaseRemote = Remotes.GetEvent("RequestPurchase")
 	startRunFunction = Remotes.GetFunction("StartRun")
 	stationDataFunction = Remotes.GetFunction("GetStationData")
