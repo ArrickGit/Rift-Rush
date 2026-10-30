@@ -2,8 +2,8 @@
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
 -- The loadout panels UIController shows in its station window (game.md Steps SP-2 / SP-3 / SP-5 / SP-6):
 --   the Bag (Inventory, usable anywhere). The Spark Sanctum and Quest Board (StationScenes), the Star-Forge
---   (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall (LegionScene) and the Hall of Champions
---   (HallScene) are drawn as scenes and routed through Renderers here.
+--   (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall (LegionScene), the Hall of Champions
+--   (HallScene) and the Rebirth pedestal (RebirthScene) are drawn as scenes and routed through Renderers here.
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards).
 --
 -- UIController owns the window and passes its drawing helpers in as a kit (Init); renderers draw into kit.content()
@@ -22,6 +22,7 @@ local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 local BlacksmithScene = require(script.Parent:WaitForChild("BlacksmithScene"))
 local HallScene = require(script.Parent:WaitForChild("HallScene"))
 local LegionScene = require(script.Parent:WaitForChild("LegionScene"))
+local RebirthScene = require(script.Parent:WaitForChild("RebirthScene"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 local StarForgeScene = require(script.Parent:WaitForChild("StarForgeScene"))
@@ -397,6 +398,7 @@ StationPanels.Renderers = {
 	QuestBoard = StationScenes.Renderers.QuestBoard,
 	SparkSanctum = StationScenes.Renderers.SparkSanctum,
 	HallOfChampions = HallScene.Render,
+	AscensionPedestal = RebirthScene.Render,
 	Inventory = renderInventory,
 } :: { [string]: () -> () }
 
@@ -406,6 +408,7 @@ function StationPanels.Reset()
 	StationScenes.Reset()
 	StarForgeScene.Reset()
 	HallScene.Reset()
+	RebirthScene.Reset()
 end
 
 function StationPanels.Init(kit: any)
@@ -418,6 +421,7 @@ function StationPanels.Init(kit: any)
 	BlacksmithScene.Init(kit)
 	LegionScene.Init(kit)
 	HallScene.Init(kit)
+	RebirthScene.Init(kit)
 end
 
 return StationPanels

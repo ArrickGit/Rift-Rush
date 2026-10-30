@@ -211,7 +211,6 @@ local NUMBER_KEYS: { [Enum.KeyCode]: number } = {
 local upgradeChosenRemote: RemoteEvent
 local anchorRemote: RemoteEvent
 local defeatRemote: RemoteEvent
-local rebirthRemote: RemoteEvent
 local purchaseRemote: RemoteEvent
 local startRunFunction: RemoteFunction
 local stationDataFunction: RemoteFunction
@@ -1409,24 +1408,6 @@ local function paragraph(order: number, label: string, color: Color3?): TextLabe
 		TextWrapped = true, TextColor3 = color or COLORS.Text, TextSize = 14, LayoutOrder = order })
 end
 
-local function itemRow(order: number, title: string, desc: string, buttonText: string, buttonColor: Color3,
-	enabled: boolean, onClick: () -> ()): GuiButton
-	local frame: Frame = create("Frame", { Size = UDim2.new(1, -6, 0, 72), BackgroundColor3 = COLORS.PanelLight,
-		LayoutOrder = order }, stationContent)
-	round(frame, 12)
-	outline(frame, COLORS.Stroke, 2.5)
-	topLit(frame, 0.78)
-	pad(frame, 10)
-	newLabel(frame, { Size = UDim2.new(1, -170, 0, 22), Text = title, Font = DISPLAY_FONT, TextSize = 19,
-		TextStrokeTransparency = 0.2 })
-	newLabel(frame, { Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, -170, 0, 28), Text = desc,
-		TextColor3 = COLORS.Muted, TextSize = 14, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
-	local button = newButton(frame, buttonText, buttonColor, onClick, { AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(150, 44), TextSize = 18 })
-	setEnabled(button, enabled, buttonColor)
-	return button
-end
-
 local function unlockedTierFor(world: number): number?
 	local unlocked = profile and profile.UnlockedWorlds
 	if type(unlocked) ~= "table" then
@@ -1546,75 +1527,9 @@ local function renderRiftGate()
 	setEnabled(start, unlockedTierFor(selectedWorld) ~= nil, COLORS.Accent)
 end
 
-local function renderPedestal()
-	local preview = stationData
-	if type(preview) ~= "table" then
-		paragraph(1, "Loading…", COLORS.Muted)
-		return
-	end
-	local current = tonumber(preview.CurrentTier) or 0
-	local nextTier = tonumber(preview.NextTier) or (current + 1)
-	local level = tonumber(preview.HunterLevel) or 1
-	local reqLevel = tonumber(preview.ReqLevel) or 50
-	local eligible = preview.Eligible == true
-
-	section(1, ("Rebirth %s  ➜  Rebirth %s"):format(if current > 0 then toRoman(current) else "—", toRoman(nextTier)))
-	local progress = newBar(stationContent, if eligible then COLORS.Good else COLORS.XP, 2)
-	setBar(progress, level / reqLevel, ("Hunter Level %d / %d%s"):format(level, reqLevel, if eligible then "  ✔" else ""))
-	paragraph(3, ("Rewards:  <b>x%.2f</b> Damage & HP   ·   <b>x%.2f</b> Rift Dust & XP   ·   <b>+%d</b> %s Rebirth Sparks"):format(
-		tonumber(preview.NextDmgMult) or 1, tonumber(preview.NextEcoMult) or 1, tonumber(preview.SparksGain) or 0,
-		currencyIcon("RebirthSpark")))
-
-	section(4, "Standard Rebirth (Free)")
-	paragraph(5, "Hunter Level resets to 1. Unspent Rift Dust is consumed (your Protected Vault is safe), Worlds 2-8 re-lock and extra weapons need a reactivation fee. Relics, Mastery, Link Skills, Ascension nodes and Boss Cores are always kept.",
-		COLORS.Muted)
-	local standard = newButton(stationContent, "✨ Rebirth (Standard)", COLORS.Accent, function()
-		rebirthRemote:FireServer({ Mode = "Standard" })
-	end, { Size = UDim2.new(1, 0, 0, 42), LayoutOrder = 6 })
-	setEnabled(standard, eligible, COLORS.Accent)
-
-	section(7, "Keep Everything Rebirth")
-	local seals = tonumber(preview.KeepEverythingSeals) or 0
-	paragraph(8, ("Keeps Rift Dust, Worlds and Weapons, banks <b>+%d Legacy levels</b> and pays <b>+%d bonus Sparks</b>. Needs the True Ascendant pass or a Keep Everything Seal (you have %d)."):format(
-		tonumber(preview.LegacyGain) or 0, tonumber(preview.KeepBonusSparks) or 0, seals), COLORS.Muted)
-	local keep = newButton(stationContent, "👑 Rebirth (Keep Everything)", COLORS.Gold:Lerp(COLORS.Accent, 0.35),
-		function()
-			rebirthRemote:FireServer({ Mode = "KeepEverything" })
-		end, { Size = UDim2.new(1, 0, 0, 42), LayoutOrder = 9 })
-	setEnabled(keep, eligible and preview.CanKeepEverything == true, COLORS.Gold:Lerp(COLORS.Accent, 0.35))
-
-	section(10, "Robux")
-	local order = 10
-	if not eligible then
-		order += 1
-		itemRow(order, "Instant Rebirth", ("Rebirth now at %d%% progress. The price drops as you level."):format(
-			math.floor((tonumber(preview.SkipProgress) or 0) * 100)), ("R$ %d"):format(tonumber(preview.SkipPrice) or 0),
-			COLORS.Robux, true, function()
-				requestPurchase("Product", "InstantRebirth")
-			end)
-	end
-	local credits = preview.PendingSkipCredits
-	if type(credits) == "table" and #credits > 0 then
-		order += 1
-		paragraph(order, ("⏳ %d Instant Rebirth credit(s) waiting — they apply in town once your progress matches."):format(
-			#credits), Color3.fromRGB(120, 255, 200))
-	end
-	local seal = MonetizationConfig.Products.KeepEverythingSeal
-	order += 1
-	itemRow(order, seal.Name, SHOP_BLURBS.KeepEverythingSeal, ("R$ %d"):format(seal.Price), COLORS.Robux, true, function()
-		requestPurchase("Product", seal.Key)
-	end)
-	local pass = MonetizationConfig.Passes.TrueAscendant
-	order += 1
-	itemRow(order, pass.Name, SHOP_BLURBS.TrueAscendant, if preview.HasTrueAscendant then "Owned" else ("R$ %d"):format(pass.Price),
-		COLORS.Robux, preview.HasTrueAscendant ~= true, function()
-			requestPurchase("Pass", pass.Key)
-		end)
-end
-
 local STATION_RENDERERS: { [string]: () -> () } = {
 	RiftGate = renderRiftGate,
-	AscensionPedestal = renderPedestal,
+	AscensionPedestal = StationPanels.Renderers.AscensionPedestal,
 	SparkSanctum = StationPanels.Renderers.SparkSanctum,
 	RiftShrine = function()
 		renderShop()
@@ -2189,7 +2104,6 @@ function UIController.Init()
 	upgradeChosenRemote = Remotes.GetEvent("UpgradeChosen")
 	anchorRemote = Remotes.GetEvent("AnchorDecision")
 	defeatRemote = Remotes.GetEvent("DefeatChoice")
-	rebirthRemote = Remotes.GetEvent("RequestRebirth")
 	purchaseRemote = Remotes.GetEvent("RequestPurchase")
 	startRunFunction = Remotes.GetFunction("StartRun")
 	stationDataFunction = Remotes.GetFunction("GetStationData")
@@ -2212,6 +2126,7 @@ function UIController.Init()
 		newButton = newButton, setEnabled = setEnabled, newBar = newBar, setBar = setBar, section = section,
 		paragraph = paragraph, currencyIcon = currencyIcon, formatNumber = formatNumber, toRoman = toRoman,
 		inRun = inRun, newPanel = newPanel, newLayer = newLayer, COLORS = COLORS, DISPLAY_FONT = DISPLAY_FONT,
+		requestPurchase = requestPurchase,
 		renderStation = function()
 			renderStation()
 		end,
