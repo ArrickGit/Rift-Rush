@@ -137,7 +137,7 @@ These 4 of the 17 Ascension Shop nodes have no gameplay effect yet. **Since `8ac
 
 ### 2.2 UI Bugs, Bag Redesign & Missing Screens (Step PL-2)
 
-1. **Fix 3 Specific HUD & UI Glitches:**
+1. **Fix 3 Specific HUD & UI Glitches:** ✅ *Done 2026-10-30 (see Section 5.1).*
    * **Popup Overlap Fix:** Toast/popup messages currently overlap open station windows. Move notifications to a high `ZIndex` top-center/top-right toast queue or suppress non-critical HUD popups while a full-screen station panel is open.
    * **Combo Counter Overlap Fix:** Reposition the Combo Counter so it anchors cleanly below the player's health/ability cluster or left of center, never overlapping the top-right currency display.
    * **"Label" Flash Before Profile Load Fix:** Initialize all HUD text labels with `Text = ""` (or a clean loading shimmer state) instead of default `"Label"` text until `PlayerDataLoaded` fires on the client.
@@ -223,7 +223,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | 2026-10-30 | `b99fe86` | `game-like-ui` | **Rebirth → before / after** (`RebirthScene.luau`): Hunter Level bar racing to the required level with a portal that glows **READY!**, NOW vs AFTER cards (Damage & HP, Dust & XP multipliers, +Sparks) with a pulsing », Standard / Keep Everything choice cards whose buttons **need a second tap to confirm** (the old panel rebirthed on one click) or say why they're locked, and the Robux options as pills. The renderer moved out of `UIController` (−89 lines, −3 locals: `renderPedestal`, `itemRow`, `rebirthRemote`); the kit now passes `requestPurchase`. |
 | 2026-10-30 | `54cd527` | `game-like-ui` | **Bag → paper doll** (`BagScene.luau`): your full-body avatar with the weapon slot (M-badge) on one side, Starting Relic slots (filled / "+" / locked) on the other and Link gems underneath; a weapon card with Mastery bar and stat chips; a "This run" strip of relics and curses during runs; a quick-swap grid (tap a weapon to equip, tap a relic to toggle start-with; town only). **All 8 station windows are now scenes**; `StationPanels` is just routing + the Celebrate banner (≈420 → 159 lines, old list helpers deleted). |
 | 2026-10-30 | `fa8630c` | `game-like-ui` | **Rift Gate → world map** (`RiftGateScene.luau`): 8 islands on a snaking dotted path over a starfield (open worlds glow in their colour with a Corruption badge, locked worlds show a padlock, unbuilt worlds 2–8 are shadowed "SOON" with their planned names), a Corruption dial (big tier, −10/−1/+1/+10 pills, reward multiplier in gold; a "beat the Room 10 boss" hint until it unlocks), and a portal panel with **Open Portal**. `UIController` keeps `startRun(world, corruption)` and passes it through the kit (−95 lines; `renderRiftGate`, `selectedWorld`, `selectedCorruption`, `unlockedTierFor`, `MAX_WORLDS` removed). Disabled `SceneKit.pill`s now look clearly greyed out. |
-| 2026-10-30 | *(next commit)* | `game-like-ui` | **Settings & Credits screen** (`SettingsScene.luau`, opened from the ⚙ in the Bag, works in runs too): SFX volume (Off / 25 / 50 / 75 / 100 %) and Screen Shake (On / Off) as big pills, saved with the profile via a new `SaveSettings` remote (validated in `PlayerDataService`; new `Settings` profile field, existing saves get defaults), applied on every profile update (`Sfx.SetVolumeScale`, `Camera25DController.SetShakeEnabled`). The **Credits** card names the game-icons.net authors (CC BY 3.0) and Kenney (CC0), **fixing B3**. |
+| 2026-10-30 | `708eb77` | `game-like-ui` | **Settings & Credits screen** (`SettingsScene.luau`, opened from the ⚙ in the Bag, works in runs too): SFX volume (Off / 25 / 50 / 75 / 100 %) and Screen Shake (On / Off) as big pills, saved with the profile via a new `SaveSettings` remote (validated in `PlayerDataService`; new `Settings` profile field, existing saves get defaults), applied on every profile update (`Sfx.SetVolumeScale`, `Camera25DController.SetShakeEnabled`). The **Credits** card names the game-icons.net authors (CC BY 3.0) and Kenney (CC0), **fixing B3**. |
+| 2026-10-30 | *(next commit)* | `game-like-ui` | **The 3 HUD glitches from 2.2 fixed.** (1) Toasts: while a station window is open they stack at the bottom-right edge beside it instead of covering its title (top-centre otherwise). (2) The combo counter moved from the right edge (inside the currency column) to the left, under the vitals. (3) "Label" flash: `LABEL_DEFAULTS.Text = ""`, plus blank defaults on the waypoint and boss-callout labels. |
 
 ### 5.2 Game-Like UI Redesign (Branch `game-like-ui`)
 
@@ -250,7 +251,7 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | **Rift Gate** | ✅ | **World map** (see changelog). Tested: render, Open Portal really starts a run (RunId set, window closes). *Not yet seen:* Corruption pills with a tier unlocked (B24). |
 | **Store** | ✅ (already) | Checked 2026-10-30: the Rift Shrine store was already a game-style screen (ShardUI illustrated cards, corner badges, green Robux price buttons, tab sidebar). No rebuild needed. |
 | **Settings & Credits** | ✅ | SFX volume + Screen Shake pills (saved to the profile, applied on join) and the Credits card. Open via ⚙ in the Bag. Tested: open, Screen Shake Off → saved on the server → On again. |
-| **HUD** | ⬜ | The 2.2 HUD fixes (popup overlap, combo overlap, "Label" flash). |
+| **HUD** | ✅ | The 3 glitches from 2.2 are fixed (toasts beside open windows, combo on the left, no "Label" flash). Tested: toasts with the Blacksmith open, a 27 combo in a run, and a scan for any label still reading "Label". |
 
 **Tech notes for whoever continues:**
 * Each scene gets its own module (`StationScenes.luau` = Sanctum + Quest Board, `StarForgeScene.luau`, ...) using the shared helpers in `SceneKit.luau` (`tween`, `circle`, `icon`, `hoverGrow`, `burst`, `pill`, and an `overlay()` layer above the window where rotation renders). Route each scene through `StationPanels.Renderers`. **`UIController` is at Luau's 200-local limit**, so never add locals there.
@@ -273,11 +274,11 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | B8 | Low | Open | Legacy empty sound slots (`Hit`, `Crit`, `LevelUp`, `Pickup`, `BossRoar`, `Rebirth`) in `AssetRegistry.Sounds` still have no IDs, so code calling them is silent. |
 | B9 | Low | Not ours | Console warning for `rbxassetid://203785492` comes from existing place content, not `src/`. |
 | B10 | Security | Open | **Rotate the Open Cloud API key.** It was pasted into a chat once. It now lives in `~/.config/rift-rush/opencloud.key` (never commit it). |
-| B11 | Medium | Open | Section 2.2's popup / combo / "Label"-flash HUD glitches are still unfixed. Popups may cover the new, bigger station window. |
+| B11 | Medium | ✅ Fixed | Section 2.2's popup / combo / "Label"-flash HUD glitches are still unfixed. Popups may cover the new, bigger station window. |
 | B12 | High | ✅ Fixed | *Broken Crown* (`REL_07`) `Desc` had literal `+35%` / `50%` in a `string.format` string, so `Describe` threw "missing argument #3": the old Star-Forge panel errored, and the **server** errored when announcing a new Broken Crown or a star-up. Escaped as `%%`. Lesson: any `%` in a relic `Desc` must be written `%%`. |
 | B13 | Low | Open | The Star-Forge's test profile was spent down in testing (Broken Crown 1★ → 2★, 10 Shards and 500 Dust used). Harmless in Studio. |
 | B15 | Low | Unverified | The Blacksmith's "just forged" flare + `Forge_Success` were not run on real data (it would have spent the test profile's only 2 Boss Cores and permanently unlocked the Bow). Same detection pattern as the Sanctum and Star-Forge, which do work. |
-| B16 | Low | Note | Station-panel toasts ("Greatsword equipped") appear on top of the window header. That's B11 in action; it doesn't block anything. |
+| B16 | Low | ✅ Fixed | Station-panel toasts ("Greatsword equipped") appear on top of the window header. That's B11 in action; it doesn't block anything. |
 | B17 | Low | Unverified | Legion Hall gem socketing / removing and the socket pop were not exercised: no weapon on the test profile is at Mastery 10. The remote (`LoadoutAction EquipLink / UnequipLink`) is unchanged from the old panel. |
 | B18 | Info | Note | Clicking outside the station window closes it (by design). When testing with MCP mouse input, use `AbsolutePosition` coordinates: screenshots include the 58px top-bar inset. |
 | B19 | Info | Note | Restarting Studio Play many times quickly logs "DataStore request was added to queue" (each stop saves and releases the session lock). Harmless; it's the test loop, not game code. |
@@ -288,6 +289,7 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | B24 | Low | Unverified | Rift Gate Corruption pills / multiplier with a real unlocked tier: the test profile hasn't beaten Room 10, so only the "locked" hint has been seen. |
 | B25 | High (balance) | Confirmed again | An idle character in Room 1 died within seconds of a test run (Rift Collapse screen). Same issue as 2.4 / PL-4. Nothing was lost (empty pouch). |
 | B26 | Low | Open | Settings is only reachable through the Bag's ⚙. A gear on the HUD / town menu would make it easier to find. Music volume and damage-number style (from 2.2) aren't there yet: there's no music, and only one damage-number style. |
+| B27 | Low | Open | The combo counter stays on screen behind the Rift Collapse (defeat) screen until the combo attribute resets. Cosmetic. |
 | B14 | Low | Watch | If the server refuses a strike (cooldown, a run started), the forge waits ~4s then re-enables STRIKE; the hammer still swings first. That's fine, but a refusal message comes only as the normal Notify toast. |
 
 ### 5.4 Leftover Deliverables (Checklist)
@@ -304,7 +306,7 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 - [x] Settings & Credits screen (fixes B3)
 - [x] Rift Gate world map
 - [x] Store (already game-style, checked)
-- [ ] HUD fixes from 2.2 (popup overlap, combo overlap, "Label" flash) *(next candidate)*
+- [x] HUD fixes from 2.2 (popup overlap, combo overlap, "Label" flash)
 - [ ] Merge `game-like-ui` → `main` after the user reviews it
 
 **Assets now in hand but not used yet:**

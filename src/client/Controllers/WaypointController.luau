@@ -78,6 +78,7 @@ end
 
 local function label(parent: Instance, props: { [string]: any }): TextLabel
 	local text = Instance.new("TextLabel")
+	text.Text = ""
 	text.BackgroundTransparency = 1
 	text.Font = Enum.Font.FredokaOne
 	text.TextColor3 = Color3.new(1, 1, 1)

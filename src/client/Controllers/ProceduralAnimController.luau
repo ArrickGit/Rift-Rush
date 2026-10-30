@@ -211,6 +211,7 @@ local function buildBanner()
 	stroke.Parent = bannerFrame
 
 	bannerLabel = Instance.new("TextLabel")
+	bannerLabel.Text = ""
 	bannerLabel.BackgroundTransparency = 1
 	bannerLabel.Position = UDim2.fromOffset(0, 6)
 	bannerLabel.Size = UDim2.new(1, 0, 0, 32)

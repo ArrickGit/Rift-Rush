@@ -189,6 +189,7 @@ local DISPLAY_FONT = Enum.Font.FredokaOne -- titles, buttons, numbers
 local BODY_FONT = Enum.Font.FredokaOne -- the pack uses Fredoka One for every line of text
 
 local LABEL_DEFAULTS: Payload = {
+	Text = "", -- never the engine's "Label" placeholder while the HUD waits for the profile
 	BackgroundTransparency = 1,
 	Font = BODY_FONT,
 	TextColor3 = COLORS.Text,
@@ -788,8 +789,13 @@ end
 
 local function toast(message: string, color: Color3?)
 	toastOrder += 1
+	-- With a station window open, toasts stack at the bottom-right edge, beside the window instead of over it.
+	local beside = openStation ~= nil
+	toastList.AnchorPoint = if beside then Vector2.new(1, 1) else Vector2.new(0.5, 0)
+	toastList.Position = if beside then UDim2.new(1, -12, 1, -24) else UDim2.new(0.5, 0, 0, 120)
+	toastList.Size = UDim2.fromOffset(if beside then 260 else 460, 0)
 	local label = newLabel(toastList, {
-		Size = UDim2.fromOffset(460, 0),
+		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = COLORS.Panel,
 		BackgroundTransparency = 0.15,
@@ -1020,8 +1026,10 @@ local function buildHud()
 	round(abilityLabel, 8)
 	create("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, abilityLabel)
 
-	comboLabel = newLabel(gui, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -24, 0.42, 0),
-		Size = UDim2.fromOffset(220, 40), TextXAlignment = Enum.TextXAlignment.Right, Font = DISPLAY_FONT,
+	-- Left of centre, under the vitals: the right edge belongs to the currency column (the town menu that also lives on
+	-- the left is hidden during runs, the only time the combo shows).
+	comboLabel = newLabel(gui, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 20, 0.52, 0),
+		Size = UDim2.fromOffset(220, 40), TextXAlignment = Enum.TextXAlignment.Left, Font = DISPLAY_FONT,
 		TextSize = 30, TextColor3 = COLORS.Gold, TextStrokeTransparency = 0.3, Visible = false })
 
 	refreshRunBanner()
