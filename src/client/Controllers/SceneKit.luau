@@ -65,7 +65,7 @@ end
 function SceneKit.pill(parent: Instance, text: string, color: Color3, enabled: boolean, onClick: () -> (), props: Payload): TextButton
 	local base: Payload = { Text = text, Font = K.DISPLAY_FONT, TextSize = 14, RichText = true, AutoButtonColor = false,
 		TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.3,
-		BackgroundColor3 = if enabled then color else color:Lerp(Color3.fromHex("3a3f4f"), 0.65) }
+		BackgroundColor3 = if enabled then color else color:Lerp(Color3.fromHex("2a2e3c"), 0.82) }
 	for key, value in props do
 		base[key] = value
 	end
@@ -76,7 +76,8 @@ function SceneKit.pill(parent: Instance, text: string, color: Color3, enabled: b
 		SceneKit.hoverGrow(button, K.create("UIScale", {}, button), 1.05)
 		button.Activated:Connect(onClick)
 	else
-		button.TextTransparency = 0.4
+		button.TextTransparency = 0.55
+		button.TextStrokeTransparency = 0.8
 	end
 	return button
 end

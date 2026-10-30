@@ -80,7 +80,6 @@ local MIN_SCALE, MAX_SCALE = 0.55, 1.25
 local TOAST_SECONDS = 3.5
 local MAX_TOASTS = 4
 local UPDATE_INTERVAL = 0.1
-local MAX_WORLDS = 8
 local CARD_WIDTH = 180
 local CARD_GAP = 12
 local STATION_REFRESH_DELAY = 0.3 -- coalesces ProfileUpdated bursts into one GetStationData call
@@ -291,8 +290,6 @@ local stationContent: ScrollingFrame
 local openStation: string? = nil
 local stationData: any = nil
 local stationRefreshToken = 0
-local selectedWorld = 1
-local selectedCorruption = 0
 local startingRun = false
 
 -- Helpers --------------------------------------------------------------------------------------------------------
@@ -1408,15 +1405,6 @@ local function paragraph(order: number, label: string, color: Color3?): TextLabe
 		TextWrapped = true, TextColor3 = color or COLORS.Text, TextSize = 14, LayoutOrder = order })
 end
 
-local function unlockedTierFor(world: number): number?
-	local unlocked = profile and profile.UnlockedWorlds
-	if type(unlocked) ~= "table" then
-		return nil
-	end
-	local value = unlocked[world] or unlocked[tostring(world)]
-	return if type(value) == "number" then value else nil
-end
-
 local function closeStation()
 	if openStation then
 		StationPanels.Sfx.Play("UI_PanelClose", 0.4)
@@ -1442,17 +1430,22 @@ local function newScrim(layer: Frame): GuiObject
 	return scrim
 end
 
-local function startRun()
+local renderStation: () -> ()
+
+-- Asks the server to open a portal (the Rift Gate scene calls this through the kit).
+local function startRun(world: number, corruption: number)
 	if startingRun then
 		return
 	end
 	startingRun = true
-	local world, corruption = selectedWorld, selectedCorruption
 	task.spawn(function()
 		local ok, result = pcall(function(): any
 			return startRunFunction:InvokeServer(world, corruption)
 		end)
 		startingRun = false
+		if openStation == "RiftGate" then
+			renderStation()
+		end
 		if not ok or type(result) ~= "table" then
 			toast("The Rift Gate did not respond. Try again.", COLORS.Bad)
 		elseif result.Success then
@@ -1463,72 +1456,8 @@ local function startRun()
 	end)
 end
 
-local renderStation: () -> ()
-
-local function renderRiftGate()
-	local order = 0
-	local function nextOrder(): number
-		order += 1
-		return order
-	end
-	section(nextOrder(), "Choose a World")
-	for world = 1, MAX_WORLDS do
-		local info = RoomAsciiTemplates.GetWorld(world)
-		if info then
-			local tier = unlockedTierFor(world)
-			local selected = world == selectedWorld
-			local label = if tier
-				then ("%s  World %d · %s   (Corruption 0-%d)"):format(if selected then "▶" else "  ", world, info.Name, tier)
-				else ("🔒 World %d · %s — clear World %d's boss to unlock"):format(world, info.Name, world - 1)
-			local color = if selected then COLORS.Accent else COLORS.PanelLight
-			local button = newButton(stationContent, label, color, function()
-				selectedWorld = world
-				selectedCorruption = math.min(selectedCorruption, tier or 0)
-				renderStation()
-			end, { Size = UDim2.new(1, 0, 0, 38), TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
-				LayoutOrder = nextOrder() })
-			setEnabled(button, tier ~= nil, color)
-		end
-	end
-
-	local maxTier = unlockedTierFor(selectedWorld) or 0
-	selectedCorruption = math.clamp(selectedCorruption, 0, maxTier)
-	section(nextOrder(), "Corruption Tier")
-	local stepper: Frame = create("Frame", { Size = UDim2.new(1, 0, 0, if Shard then 60 else 40), BackgroundTransparency = 1,
-		LayoutOrder = nextOrder() }, stationContent)
-	local stepLayout = list(stepper, Enum.FillDirection.Horizontal, 8)
-	stepLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-	local function stepButton(text: string, delta: number, layoutOrder: number)
-		local target = math.clamp(selectedCorruption + delta, 0, maxTier)
-		local button = newButton(stepper, text, COLORS.PanelLight, function()
-			selectedCorruption = target
-			renderStation()
-		end, { Size = UDim2.fromOffset(if Shard then 76 else 48, 36), LayoutOrder = layoutOrder })
-		setEnabled(button, target ~= selectedCorruption, COLORS.PanelLight)
-	end
-	stepButton("-10", -10, 1)
-	stepButton("-1", -1, 2)
-	newLabel(stepper, { Size = UDim2.fromOffset(if Shard then 200 else 250, 36), TextXAlignment = Enum.TextXAlignment.Center,
-		Font = DISPLAY_FONT, TextSize = 16, LayoutOrder = 3,
-		Text = ("Tier %d  ·  <font color='#%s'>x%.2f rewards</font>"):format(selectedCorruption, COLORS.Gold:ToHex(),
-			FormulaEngine.GetCorruptionEcoMult(selectedCorruption)) })
-	stepButton("+1", 1, 4)
-	stepButton("+10", 10, 5)
-
-	local data = profile
-	if data and (tonumber(data.SuperchargedTokens) or 0) > 0 then
-		paragraph(nextOrder(), ("⚡ A Supercharged Run Token will be spent: x%d Rift Dust this run (%d left)."):format(
-			MonetizationConfig.SUPERCHARGE_DUST_MULT, data.SuperchargedTokens), Color3.fromRGB(120, 255, 200))
-	end
-	paragraph(nextOrder(), "Rift Anchors on Rooms 5, 10, 15… secure your loot. Push past them for bigger multipliers.",
-		COLORS.Muted)
-	local start = newButton(stationContent, if startingRun then "Opening…" else "🌀 Open Portal", COLORS.Accent,
-		startRun, { Size = UDim2.new(1, 0, 0, 46), TextSize = 18, LayoutOrder = nextOrder() })
-	setEnabled(start, unlockedTierFor(selectedWorld) ~= nil, COLORS.Accent)
-end
-
 local STATION_RENDERERS: { [string]: () -> () } = {
-	RiftGate = renderRiftGate,
+	RiftGate = StationPanels.Renderers.RiftGate,
 	AscensionPedestal = StationPanels.Renderers.AscensionPedestal,
 	SparkSanctum = StationPanels.Renderers.SparkSanctum,
 	RiftShrine = function()
@@ -1609,9 +1538,6 @@ local function onOpenStation(payload: any)
 	end
 	openStation = key
 	stationData = payload.Data
-	if key == "RiftGate" and unlockedTierFor(selectedWorld) == nil then
-		selectedWorld = 1
-	end
 	renderStation()
 	for _, scrim in windowScrims do
 		scrim.Visible = scrim.Parent == (if key == "RiftShrine" then shopFrame.Parent else stationFrame.Parent)
@@ -2126,7 +2052,10 @@ function UIController.Init()
 		newButton = newButton, setEnabled = setEnabled, newBar = newBar, setBar = setBar, section = section,
 		paragraph = paragraph, currencyIcon = currencyIcon, formatNumber = formatNumber, toRoman = toRoman,
 		inRun = inRun, newPanel = newPanel, newLayer = newLayer, COLORS = COLORS, DISPLAY_FONT = DISPLAY_FONT,
-		requestPurchase = requestPurchase,
+		requestPurchase = requestPurchase, startRun = startRun,
+		isStartingRun = function(): boolean
+			return startingRun
+		end,
 		renderStation = function()
 			renderStation()
 		end,

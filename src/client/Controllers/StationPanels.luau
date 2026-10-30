@@ -2,7 +2,8 @@
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
 -- Routes UIController's station window to the scene modules that draw each station: the Spark Sanctum and Quest
 -- Board (StationScenes), the Star-Forge (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall
--- (LegionScene), the Hall of Champions (HallScene), the Rebirth pedestal (RebirthScene) and the Bag (BagScene).
+-- (LegionScene), the Hall of Champions (HallScene), the Rebirth pedestal (RebirthScene), the Bag (BagScene) and
+-- the Central Rift Gate (RiftGateScene).
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards) and the HUD's
 -- run relic / curse line.
 --
@@ -22,6 +23,7 @@ local BlacksmithScene = require(script.Parent:WaitForChild("BlacksmithScene"))
 local HallScene = require(script.Parent:WaitForChild("HallScene"))
 local LegionScene = require(script.Parent:WaitForChild("LegionScene"))
 local RebirthScene = require(script.Parent:WaitForChild("RebirthScene"))
+local RiftGateScene = require(script.Parent:WaitForChild("RiftGateScene"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 local StarForgeScene = require(script.Parent:WaitForChild("StarForgeScene"))
@@ -132,6 +134,7 @@ StationPanels.Renderers = {
 	HallOfChampions = HallScene.Render,
 	AscensionPedestal = RebirthScene.Render,
 	Inventory = BagScene.Render,
+	RiftGate = RiftGateScene.Render,
 } :: { [string]: () -> () }
 
 StationPanels.Celebrate = celebrate
@@ -154,6 +157,7 @@ function StationPanels.Init(kit: any)
 	HallScene.Init(kit)
 	RebirthScene.Init(kit)
 	BagScene.Init(kit)
+	RiftGateScene.Init(kit)
 end
 
 return StationPanels
