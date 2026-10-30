@@ -1,9 +1,9 @@
 --!strict
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
 -- The loadout panels UIController shows in its station window (game.md Steps SP-2 / SP-3 / SP-5 / SP-6):
---   Blacksmith (forge / reactivate weapons), Legion Hall (Mastery & Link Skills), Star-Forge (relic collection,
---   Star-Force, Starting Relics), Hall of Champions and the Bag (Inventory, usable anywhere). The Spark Sanctum and
---   Quest Board are drawn as scenes by StationScenes and routed through Renderers here.
+--   Blacksmith (forge / reactivate weapons), Legion Hall (Mastery & Link Skills), Hall of Champions and the Bag
+--   (Inventory, usable anywhere). The Spark Sanctum and Quest Board (StationScenes) and the Star-Forge
+--   (StarForgeScene) are drawn as scenes and routed through Renderers here.
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards).
 --
 -- UIController owns the window and passes its drawing helpers in as a kit (Init); renderers draw into kit.content()
@@ -19,7 +19,9 @@ local CurseConfig = require(Shared:WaitForChild("CurseConfig"))
 local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
+local StarForgeScene = require(script.Parent:WaitForChild("StarForgeScene"))
 local StationScenes = require(script.Parent:WaitForChild("StationScenes"))
 
 type Payload = { [string]: any }
@@ -29,8 +31,6 @@ local StationPanels = {}
 local player = Players.LocalPlayer
 local K: any = nil -- UIController's kit, set by Init
 local loadoutRemote: RemoteEvent
-local starForceRemote: RemoteEvent
-local useSafeguard = false
 
 local celebrateFrame: Frame
 local celebrateIcon: TextLabel
@@ -218,7 +218,7 @@ local function relicSlots(): number
 	return RelicConfig.GetStartingSlots(tonumber(nodes.AS_T3_03) or 0, player:GetAttribute("HasRelicVaultKey") == true)
 end
 
-local function relicRow(order: number, relicId: string, forge: boolean)
+local function relicRow(order: number, relicId: string)
 	local info = RelicConfig.Relics[relicId]
 	local owned = profileTable("RelicStars")[relicId]
 	if type(owned) ~= "table" then
@@ -226,25 +226,8 @@ local function relicRow(order: number, relicId: string, forge: boolean)
 		return
 	end
 	local count = tonumber(owned.Stars) or 1
-	local pity = tonumber(owned.PityCount) or 0
 	local equipped = table.find(profileTable("EquippedStartingRelics"), relicId) ~= nil
-	local desc = RelicConfig.Describe(relicId, count)
 	local buttons: { RowButton } = {}
-	if forge then
-		local quote = RelicConfig.GetForgeQuote(count)
-		if quote then
-			local chance = RelicConfig.GetForgeChance(count, pity, tonumber(profileTable("AscensionNodes").AS_T3_02) or 0)
-			desc ..= ("\n<font color='#%s'>Next ★: %d %s + %s %s · %d%% success%s</font>"):format(K.COLORS.Gold:ToHex(), quote.Shards,
-				K.currencyIcon("RelicShards"), K.formatNumber(quote.Dust), K.currencyIcon("RiftDust"), math.round(chance * 100),
-				if pity > 0 then (" (pity +%d%%)"):format(math.round(pity * RelicConfig.PITY_PER_FAILURE * 100)) else "")
-			local affordable = profileNumber("RelicShards") >= quote.Shards and profileNumber("RiftDust") >= quote.Dust
-			table.insert(buttons, { Text = "⭐ Star-Force", Color = K.COLORS.Gold, Enabled = affordable and not K.inRun(), OnClick = function()
-				starForceRemote:FireServer({ Relic = relicId, Safeguard = useSafeguard })
-			end })
-		else
-			desc ..= "\n" .. info.StarDesc .. " — MAX"
-		end
-	end
 	if equipped then
 		table.insert(buttons, { Text = "Unequip", Color = K.COLORS.Bad, Enabled = not K.inRun(), OnClick = function()
 			loadoutAction("UnequipRelic", { Relic = relicId })
@@ -256,24 +239,7 @@ local function relicRow(order: number, relicId: string, forge: boolean)
 			end })
 	end
 	actionRow(order, ("%s %s  <font color='#%s'>%s</font>%s"):format(info.Icon, info.Name, K.COLORS.Gold:ToHex(), stars(count),
-		if equipped then "  🎒" else ""), desc, buttons, 96)
-end
-
-local function renderStarForge()
-	K.section(1, ("Relic Collection  ·  Starting Relics %d / %d"):format(#profileTable("EquippedStartingRelics"), relicSlots()))
-	K.paragraph(2, ("Star-Force spends %s Relic Shards + %s Rift Dust. Failure is never destructive and adds +25%% to the next try. You have %s %s and %s %s."):format(
-		K.currencyIcon("RelicShards"), K.currencyIcon("RiftDust"), K.formatNumber(profileNumber("RelicShards")), K.currencyIcon("RelicShards"),
-		K.formatNumber(profileNumber("RiftDust")), K.currencyIcon("RiftDust")), K.COLORS.Muted)
-	local safeguards = profileNumber("StarForceSafeguards")
-	local toggle = K.newButton(K.content(), ("🛡 Safeguard %s  (have %d) — refunds Shards on a failure"):format(
-		if useSafeguard then "ON" else "OFF", safeguards), if useSafeguard then K.COLORS.Good else K.COLORS.PanelLight, function()
-			useSafeguard = not useSafeguard
-			K.renderStation()
-		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = 3 })
-	K.setEnabled(toggle, safeguards > 0, if useSafeguard then K.COLORS.Good else K.COLORS.PanelLight)
-	for index, relicId in RelicConfig.Order do
-		relicRow(3 + index, relicId, true)
-	end
+		if equipped then "  🎒" else ""), RelicConfig.Describe(relicId, count), buttons, 96)
 end
 
 local MEDALS = { "🥇", "🥈", "🥉" }
@@ -389,7 +355,7 @@ local function renderInventory()
 		if profileTable("RelicStars")[relicId] then
 			anyRelic = true
 			order += 1
-			relicRow(order, relicId, false)
+			relicRow(order, relicId)
 		end
 	end
 	if not anyRelic then
@@ -482,7 +448,7 @@ end
 StationPanels.Renderers = {
 	Blacksmith = renderBlacksmith,
 	LegionHall = renderLegionHall,
-	StarForge = renderStarForge,
+	StarForge = StarForgeScene.Render,
 	QuestBoard = StationScenes.Renderers.QuestBoard,
 	SparkSanctum = StationScenes.Renderers.SparkSanctum,
 	HallOfChampions = renderHallOfChampions,
@@ -491,14 +457,18 @@ StationPanels.Renderers = {
 
 StationPanels.Celebrate = celebrate
 StationPanels.Sfx = Sfx
-StationPanels.Reset = StationScenes.Reset
+function StationPanels.Reset()
+	StationScenes.Reset()
+	StarForgeScene.Reset()
+end
 
 function StationPanels.Init(kit: any)
 	K = kit
 	loadoutRemote = Remotes.GetEvent("LoadoutAction")
-	starForceRemote = Remotes.GetEvent("StarForce")
 	buildCelebration()
+	SceneKit.Init(kit)
 	StationScenes.Init(kit)
+	StarForgeScene.Init(kit)
 end
 
 return StationPanels

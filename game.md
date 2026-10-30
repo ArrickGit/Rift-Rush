@@ -215,6 +215,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | 2026-10-28 | `af46038` | `main` | Single-player World 1 loop complete (old Steps SP-1 → SP-6): landmarks, vista, climb rooms + acid, waypoints, Blacksmith, Mastery, weapons 4–8, relics + Star-Force, curses, session locking, quests, leaderboards, mobile controls, station panels. |
 | 2026-10-29 | `e545dff` | `game-like-ui` | **Asset drop:** 96 game-icons.net icons (every weapon, ability, link skill, relic, Ascension node, quest, curse, upgrade card, currency + 15 UI glyphs), 16 Kenney VFX textures, 9 Kenney UI panel textures, and 29 Kenney sounds, all uploaded to Roblox. IDs are in `AssetRegistry.Icons / VfxTextures / UiTextures / Sounds`. |
 | 2026-10-29 | `8ac6b82` | `game-like-ui` | **Spark Sanctum → skill tree.** **Quest Board → pinned parchment cards + WANTED posters.** New `Sfx.luau` (all buttons click; windows open / close with sounds). Station window enlarged 660×540 → 700×600. 4 unwired Ascension nodes flagged `ComingSoon` (shown as SOON, refused by the server). |
+| 2026-10-30 | `146f53c` | `game-like-ui` | This live log (Section 5) added; Ascension node IDs in 2.1 corrected against the code. |
+| 2026-10-30 | *(next commit)* | `game-like-ui` | **Star-Forge → anvil scene** (`StarForgeScene.luau`): relic shelf, 5 star sockets, relic on the anvil, big success % with a pity "heat" bar, 3-blow hammer animation, star-slam / smoke-fizzle results. Shared helpers moved to `SceneKit.luau` (incl. a new `pill` button). **Bug fix:** *Broken Crown*'s description had unescaped `%` signs, so `RelicConfig.Describe("REL_07")` threw, on the server too (new-relic and star-up celebrations). |
 
 ### 5.2 Game-Like UI Redesign (Branch `game-like-ui`)
 
@@ -232,8 +234,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | :--- | :--- | :--- |
 | **Spark Sanctum** (Ascension) | ✅ | Skill tree with tier rows T1–T4 + ∞. Round icon nodes joined by glowing branches, locked tiers say "🔒 Rebirth X", level pips under each node, gold glow on affordable nodes. A detail card on the right holds the Upgrade button. Big Sparks counter + two-click Respec. |
 | **Quest Board** | ✅ | 3 pinned parchment cards (icon disc, big "12 / 60", bar, reward icons, glowing Claim). Claiming flies the rewards and slams a DONE stamp. 2 WANTED bounty posters below. Countdown pill shows when the next dailies arrive. |
-| **Star-Force** | 🔨 next | **Anvil scene.** A shelf of relic icons along the top (undiscovered = dark silhouette "?"). The selected relic sits on a big anvil with **5 star sockets** above it. Success chance is shown as a huge %, and the **pity meter is a "heat" bar** that glows hotter after each failure. A Safeguard shield toggles on the anvil. **Strike!** plays 3 hammer hits (`Forge_Hammer1–3`) with sparks, then either a star slams into its socket (`Forge_Success` + burst) or the sparks fizzle (`Forge_Fail`) and the heat rises. |
-| **Blacksmith** | ⬜ | **Weapon rack.** 8 weapons hang on a wooden wall. Owned ones are bright, locked ones are black silhouettes with a price tag (Dust + Cores icons). Tapping one opens a card with Attack / Q / Passive icons and a Forge button (hammer). Equipped weapon gets a glowing frame. |
+| **Star-Forge** | ✅ | **Anvil scene.** A shelf of 8 relic tiles (undiscovered = dark silhouette + "?", equipped = green bag badge). The selected relic sits on an anvil under **5 star sockets** (the next one pulses orange). Success chance is a huge % with a bar whose orange end is the **pity "heat"** from failed strikes. The detail card has the effect, the next star's bonus, the cost (red when short), **🔨 STRIKE!**, and small Guard (Safeguard) / Start-with toggles. STRIKE swings a hammer 3 times (`Forge_Hammer1–3` + sparks), then a star slams into its socket (`Forge_Success` + bursts) or smoke puffs (`Forge_Fail`) and the heat pours in. Tested on real server data: a 90% fail, then a 100% success. |
+| **Blacksmith** | 🔨 next | **Weapon rack.** 8 weapons hang on a wooden wall. Owned ones are bright, locked ones are black silhouettes with a price tag (Dust + Cores icons). Tapping one opens a card with Attack / Q / Passive icons and a Forge button (hammer). Equipped weapon gets a glowing frame. |
 | **Legion Hall** | ⬜ | **Weapon carousel** with a big **Mastery ring** around the weapon icon (XP progress as a radial ring, level in the middle). **6 link-gem sockets** along the bottom: drag / tap a weapon's Link gem into a socket. Locked sockets show the Mastery needed. |
 | **Hall of Champions** | ⬜ | **Podium** with the top 3 as avatar headshots (gold / silver / bronze pedestals), ranks 4–10 as hanging ribbons, 3 board tabs as banners. The player's own rank is pinned at the bottom. |
 | **Rebirth** | ⬜ | **Before → After split.** Left is "now" (level, multiplier), right is "after" (new multiplier, +Sparks in huge gold), with a big pulsing portal button in the middle. Standard vs Keep-Everything as 2 big choice cards. |
@@ -241,9 +243,10 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | **Rift Gate / Store / HUD** | ⬜ | Later: world-map style gate (World 1 lit, Worlds 2–8 shadowed), store cards with Robux badges, and the HUD fixes from 2.2. |
 
 **Tech notes for whoever continues:**
-* New scenes live in `client/Controllers/StationScenes.luau` and get routed through `StationPanels.Renderers`. **`UIController` is at Luau's 200-local limit**, so never add locals there.
+* Each scene gets its own module (`StationScenes.luau` = Sanctum + Quest Board, `StarForgeScene.luau`, ...) using the shared helpers in `SceneKit.luau` (`tween`, `circle`, `icon`, `hoverGrow`, `burst`, `pill`, and an `overlay()` layer above the window where rotation renders). Route each scene through `StationPanels.Renderers`. **`UIController` is at Luau's 200-local limit**, so never add locals there.
 * The kit `K` (passed into `StationPanels.Init` / `StationScenes.Init`) has `create`, `newLabel`, `newButton`, `round`, `outline`, `newBar`, `currencyIcon`, `formatNumber`, `profile()`, `renderStation`, `content()`, `newLayer`, etc.
-* **Roblox does not render `Rotation` on GuiObjects inside a `ClipsDescendants` scroll frame.** Tilted cards and rotated stamps don't work inside station content.
+* **Roblox does not render `Rotation` on GuiObjects inside a `ClipsDescendants` scroll frame.** Tilted cards and rotated stamps don't work inside station content; animate rotating things on `SceneKit.overlay()` instead (that's how the forge hammer swings).
+* **The kit's ShardUI gem buttons ignore the height you give them** (always ~55). Use one for the main action only; use `SceneKit.pill` for small toggles.
 * Test a panel without playing through: from the Server datamodel, fire `OpenStation` to the player with crafted `{Station=..., Data=...}`.
 
 ### 5.3 Known & Potential Bugs
@@ -253,7 +256,7 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | B1 | Medium | Suspected | **Sounds not heard yet.** All 29 sounds preload with Success in Studio, but nobody has listened to them in a playtest. Volumes may need tuning (default 0.5). |
 | B2 | High (launch) | Open | **Asset ownership.** All images and sounds were uploaded under the personal account (userId 94633131). If the game is ever published under a **group**, the assets must be re-uploaded to the group or given permission, or they'll show blank or silent. |
 | B3 | High (legal) | Open | **game-icons.net is CC BY 3.0, which requires an in-game credit.** No credits screen exists yet. Credit text is in `assets/icons/picked/CREDITS.txt`. |
-| B4 | Medium | Open | **Rojo drift risk.** Some Studio syncs were done by pushing scripts in directly because the Rojo plugin wasn't connected. Reconnect Rojo before the next Studio session so Studio exactly matches `src/`. |
+| B4 | Low | Probably OK | **Rojo drift risk.** Some Studio syncs were pushed in directly while the Rojo plugin wasn't connected. On 2026-10-30, Studio already matched `src/` before a manual push, so something is live-syncing again. Confirm the Rojo plugin says "Connected". |
 | B5 | Low | Accepted | Any Sparks spent on the 4 now-`ComingSoon` nodes before `8ac6b82` stay spent (levels kept, no effect). Respec refunds them. No live players yet, so this is harmless. |
 | B6 | Medium | Unverified | The Sanctum level-up burst and the Quest Board DONE-stamp were tested with **crafted** data. The test profile hasn't rebirthed, so a real buy has not been tested. |
 | B7 | Medium | Unverified | The 700×600 station window relies on `UIScale` to fit phones; check on a real small-screen device (and with the mobile buttons on screen). |
@@ -261,14 +264,17 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | B9 | Low | Not ours | Console warning for `rbxassetid://203785492` comes from existing place content, not `src/`. |
 | B10 | Security | Open | **Rotate the Open Cloud API key.** It was pasted into a chat once. It now lives in `~/.config/rift-rush/opencloud.key` (never commit it). |
 | B11 | Medium | Open | Section 2.2's popup / combo / "Label"-flash HUD glitches are still unfixed. Popups may cover the new, bigger station window. |
+| B12 | High | ✅ Fixed | *Broken Crown* (`REL_07`) `Desc` had literal `+35%` / `50%` in a `string.format` string, so `Describe` threw "missing argument #3": the old Star-Forge panel errored, and the **server** errored when announcing a new Broken Crown or a star-up. Escaped as `%%`. Lesson: any `%` in a relic `Desc` must be written `%%`. |
+| B13 | Low | Open | The Star-Forge's test profile was spent down in testing (Broken Crown 1★ → 2★, 10 Shards and 500 Dust used). Harmless in Studio. |
+| B14 | Low | Watch | If the server refuses a strike (cooldown, a run started), the forge waits ~4s then re-enables STRIKE; the hammer still swings first. That's fine, but a refusal message comes only as the normal Notify toast. |
 
 ### 5.4 Leftover Deliverables (Checklist)
 
 **UI redesign:**
 - [x] Spark Sanctum skill tree
 - [x] Quest Board cards + bounty posters
-- [ ] Star-Forge anvil scene *(next)*
-- [ ] Blacksmith weapon rack
+- [x] Star-Forge anvil scene
+- [ ] Blacksmith weapon rack *(next)*
 - [ ] Legion Hall carousel + link-gem sockets
 - [ ] Hall of Champions podium
 - [ ] Rebirth before → after
@@ -277,7 +283,7 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 - [ ] Merge `game-like-ui` → `main` after the user reviews it
 
 **Assets now in hand but not used yet:**
-- [ ] 14 of 16 VFX textures (`slash_02`, `fire_01`, `spark_04`, `magic_01`…) for combat hit sparks, Burn / Shock visuals, dash trails and boss telegraphs in `CombatVFXController`
+- [ ] 10 of 16 VFX textures (`slash_02`, `spark_04`, `magic_01`, `trace_02`…; the Star-Forge now uses `spark_01`, `smoke_01`, `fire_01`) for combat hit sparks, Burn / Shock visuals, dash trails and boss telegraphs in `CombatVFXController`
 - [ ] 7 of 9 Kenney UI panel textures (wood / brown panels for the Blacksmith, buttons)
 - [ ] `Combat_Swing1/2`, `Combat_Chop`, `Weapon_Equip`, `Gate_Open`, `Item_Drop` sounds → hook into combat, equip, Rift Gate and loot drops
 

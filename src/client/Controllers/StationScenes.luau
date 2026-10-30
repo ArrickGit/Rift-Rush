@@ -6,17 +6,17 @@
 --   * Quest Board: daily quests as parchment cards pinned to the board (big progress counter, reward icons, a
 --     DONE stamp once claimed) and bounties as wanted posters. Claimed rewards fly up out of the button.
 --
--- Uses the same kit as StationPanels (UIController's drawing helpers, passed in through StationPanels.Init) and
--- draws into kit.content(). Icons, textures and sounds come from AssetRegistry.
+-- Uses the same kit as StationPanels (UIController's drawing helpers, passed in through StationPanels.Init) plus
+-- SceneKit's shared helpers, and draws into kit.content(). Icons, textures and sounds come from AssetRegistry.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AscensionShopConfig = require(Shared:WaitForChild("AscensionShopConfig"))
 local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
 local QuestConfig = require(Shared:WaitForChild("QuestConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
 type Payload = { [string]: any }
@@ -27,61 +27,19 @@ local K: any = nil -- UIController's kit, set by Init
 local purchaseRemote: RemoteEvent
 local respecRemote: RemoteEvent
 local claimQuestRemote: RemoteEvent
-local flyLayer: Frame
 
 local Icons = AssetRegistry.Icons
 local Vfx = AssetRegistry.VfxTextures
 local UiTex = AssetRegistry.UiTextures
 
-local PULSE = TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
-local POP = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local HOVER = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-local function tween(instance: Instance, info: TweenInfo, goal: Payload): Tween
-	local t = TweenService:Create(instance, info, goal)
-	t:Play()
-	return t
-end
-
-local function circle(parent: Instance, props: Payload): Frame
-	local frame: Frame = K.create("Frame", props, parent)
-	K.create("UICorner", { CornerRadius = UDim.new(0.5, 0) }, frame)
-	return frame
-end
-
-local function icon(parent: Instance, image: string?, props: Payload): ImageLabel
-	local base: Payload = { BackgroundTransparency = 1, Image = image or "", ScaleType = Enum.ScaleType.Fit }
-	for key, value in props do
-		base[key] = value
-	end
-	return K.create("ImageLabel", base, parent)
-end
-
--- Grows on hover, like the kit's buttons.
-local function hoverGrow(button: GuiButton, scale: UIScale, amount: number)
-	button.MouseEnter:Connect(function()
-		tween(scale, HOVER, { Scale = amount })
-	end)
-	button.MouseLeave:Connect(function()
-		tween(scale, HOVER, { Scale = 1 })
-	end)
-end
-
--- A flare that blooms and fades over `parent`'s centre (bought node levels, stamped quests).
-local function burst(parent: GuiObject, color: Color3)
-	local flare = icon(parent, Vfx.flare_01, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(1, 1), ImageColor3 = color, ZIndex = 20 })
-	tween(flare, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{ Size = UDim2.fromScale(3, 3), ImageTransparency = 1 })
-	task.delay(0.65, function()
-		flare:Destroy()
-	end)
-end
-
-local function currencyColor(key: string): Color3
-	local info = AssetRegistry.Currencies[key]
-	return if info then info.Color else K.COLORS.Gold
-end
+local PULSE = SceneKit.PULSE
+local POP = SceneKit.POP
+local tween = SceneKit.tween
+local circle = SceneKit.circle
+local icon = SceneKit.icon
+local hoverGrow = SceneKit.hoverGrow
+local burst = SceneKit.burst
+local currencyColor = SceneKit.currencyColor
 
 -- Spark Sanctum ---------------------------------------------------------------------------------------------------
 
@@ -473,10 +431,8 @@ end
 
 -- Reward icons that float up out of `from` and fade (drawn on their own layer so a re-render cannot cut them off).
 local function flyRewards(from: GuiObject, reward: QuestConfig.Reward)
-	local root = flyLayer
-	local scale = root:FindFirstChildOfClass("UIScale")
-	local factor = if scale then scale.Scale else 1
-	local origin = (from.AbsolutePosition + from.AbsoluteSize / 2 - root.AbsolutePosition) / factor
+	local root = SceneKit.overlay()
+	local origin = SceneKit.overlayPoint(from)
 	local n = 0
 	for _, entry in REWARD_KEYS do
 		if (reward :: any)[entry.Field] then
@@ -676,7 +632,6 @@ function StationScenes.Init(kit: any)
 	purchaseRemote = Remotes.GetEvent("AscensionPurchase")
 	respecRemote = Remotes.GetEvent("AscensionRespec")
 	claimQuestRemote = Remotes.GetEvent("ClaimQuest")
-	flyLayer = K.newLayer("RiftRewardFly", 60, false)
 end
 
 return StationScenes

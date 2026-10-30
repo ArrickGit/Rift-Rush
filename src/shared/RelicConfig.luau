@@ -47,7 +47,7 @@ RelicConfig.Relics = {
 		Desc = "Critical hits heal you for %s of your Max HP (0.5s cooldown).",
 		StarDesc = "+0.5% Max HP heal per Star" },
 	REL_07 = { Id = "REL_07", Name = "Broken Crown", Icon = "👑", Color = Color3.fromRGB(230, 180, 255),
-		Desc = "+%s damage to Bosses & Elites, and +35% more damage while you are below 50% HP.",
+		Desc = "+%s damage to Bosses & Elites, and +35%% more damage while you are below 50%% HP.",
 		StarDesc = "+6% Boss damage per Star" },
 	REL_08 = { Id = "REL_08", Name = "Volatile Hourglass", Icon = "⏳", Color = Color3.fromRGB(150, 120, 255),
 		Desc = "-%s Q Ability cooldown. Casting Q emits an arcane pulse dealing %s Weapon Damage.",
