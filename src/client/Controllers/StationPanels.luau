@@ -1,9 +1,9 @@
 --!strict
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
 -- The loadout panels UIController shows in its station window (game.md Steps SP-2 / SP-3 / SP-5 / SP-6):
---   Blacksmith (forge / reactivate weapons), Legion Hall (Mastery & Link Skills), Hall of Champions and the Bag
---   (Inventory, usable anywhere). The Spark Sanctum and Quest Board (StationScenes) and the Star-Forge
---   (StarForgeScene) are drawn as scenes and routed through Renderers here.
+--   Legion Hall (Mastery & Link Skills), Hall of Champions and the Bag (Inventory, usable anywhere). The Spark
+--   Sanctum and Quest Board (StationScenes), the Star-Forge (StarForgeScene) and the Blacksmith (BlacksmithScene)
+--   are drawn as scenes and routed through Renderers here.
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards).
 --
 -- UIController owns the window and passes its drawing helpers in as a kit (Init); renderers draw into kit.content()
@@ -19,6 +19,7 @@ local CurseConfig = require(Shared:WaitForChild("CurseConfig"))
 local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local BlacksmithScene = require(script.Parent:WaitForChild("BlacksmithScene"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 local StarForgeScene = require(script.Parent:WaitForChild("StarForgeScene"))
@@ -156,18 +157,6 @@ local function weaponDesc(info: WeaponConfig.WeaponInfo): string
 	local ability = info.Ability
 	return ("%d dmg · %.1f atk/s · <b>Q</b> %s · <b>%s</b>: %s"):format(info.BaseDamage, info.AttacksPerSecond,
 		if ability then ability.Name else "—", info.PassiveName, info.PassiveDesc)
-end
-
-local function renderBlacksmith()
-	K.section(1, "Forge & Reactivate Weapons")
-	K.paragraph(2, ("Your wallet: %s %s   %s %s   ·   Forged weapons stay yours; a Standard Rebirth only switches them off until you pay a 25%% reactivation fee."):format(
-		K.currencyIcon("RiftDust"), K.formatNumber(profileNumber("RiftDust")), K.currencyIcon("BossCores"), K.formatNumber(profileNumber("BossCores"))),
-		K.COLORS.Muted)
-	for index, weaponId in WeaponConfig.Order do
-		local info = WeaponConfig.Weapons[weaponId]
-		actionRow(2 + index, ("%s %s  <font color='#%s'>%s</font>"):format(info.Icon, info.Name, K.COLORS.Muted:ToHex(), info.Archetype),
-			weaponDesc(info), weaponButtons(weaponId, true), 84)
-	end
 end
 
 local function linkSlots(): number
@@ -446,7 +435,7 @@ function StationPanels.RunInfoText(): string
 end
 
 StationPanels.Renderers = {
-	Blacksmith = renderBlacksmith,
+	Blacksmith = BlacksmithScene.Render,
 	LegionHall = renderLegionHall,
 	StarForge = StarForgeScene.Render,
 	QuestBoard = StationScenes.Renderers.QuestBoard,
@@ -469,6 +458,7 @@ function StationPanels.Init(kit: any)
 	SceneKit.Init(kit)
 	StationScenes.Init(kit)
 	StarForgeScene.Init(kit)
+	BlacksmithScene.Init(kit)
 end
 
 return StationPanels

@@ -216,7 +216,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | 2026-10-29 | `e545dff` | `game-like-ui` | **Asset drop:** 96 game-icons.net icons (every weapon, ability, link skill, relic, Ascension node, quest, curse, upgrade card, currency + 15 UI glyphs), 16 Kenney VFX textures, 9 Kenney UI panel textures, and 29 Kenney sounds, all uploaded to Roblox. IDs are in `AssetRegistry.Icons / VfxTextures / UiTextures / Sounds`. |
 | 2026-10-29 | `8ac6b82` | `game-like-ui` | **Spark Sanctum → skill tree.** **Quest Board → pinned parchment cards + WANTED posters.** New `Sfx.luau` (all buttons click; windows open / close with sounds). Station window enlarged 660×540 → 700×600. 4 unwired Ascension nodes flagged `ComingSoon` (shown as SOON, refused by the server). |
 | 2026-10-30 | `146f53c` | `game-like-ui` | This live log (Section 5) added; Ascension node IDs in 2.1 corrected against the code. |
-| 2026-10-30 | *(next commit)* | `game-like-ui` | **Star-Forge → anvil scene** (`StarForgeScene.luau`): relic shelf, 5 star sockets, relic on the anvil, big success % with a pity "heat" bar, 3-blow hammer animation, star-slam / smoke-fizzle results. Shared helpers moved to `SceneKit.luau` (incl. a new `pill` button). **Bug fix:** *Broken Crown*'s description had unescaped `%` signs, so `RelicConfig.Describe("REL_07")` threw, on the server too (new-relic and star-up celebrations). |
+| 2026-10-30 | `a284759` | `game-like-ui` | **Star-Forge → anvil scene** (`StarForgeScene.luau`): relic shelf, 5 star sockets, relic on the anvil, big success % with a pity "heat" bar, 3-blow hammer animation, star-slam / smoke-fizzle results. Shared helpers moved to `SceneKit.luau` (incl. a new `pill` button). **Bug fix:** *Broken Crown*'s description had unescaped `%` signs, so `RelicConfig.Describe("REL_07")` threw, on the server too (new-relic and star-up celebrations). |
+| 2026-10-30 | *(next commit)* | `game-like-ui` | **Blacksmith → weapon rack** (`BlacksmithScene.luau`): 8 weapons on pegs on a wooden wall (never-forged = black silhouette + lock, switched-off = grey + OFF tag, owned = accent glow + Mastery badge, equipped = green ✔), and a detail card with damage / speed / Q-cooldown chips, passive, cost chips and one action (Forge / Reactivate / Equip). Forged weapons flare from white into colour with `Forge_Success`. |
 
 ### 5.2 Game-Like UI Redesign (Branch `game-like-ui`)
 
@@ -235,8 +236,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | **Spark Sanctum** (Ascension) | ✅ | Skill tree with tier rows T1–T4 + ∞. Round icon nodes joined by glowing branches, locked tiers say "🔒 Rebirth X", level pips under each node, gold glow on affordable nodes. A detail card on the right holds the Upgrade button. Big Sparks counter + two-click Respec. |
 | **Quest Board** | ✅ | 3 pinned parchment cards (icon disc, big "12 / 60", bar, reward icons, glowing Claim). Claiming flies the rewards and slams a DONE stamp. 2 WANTED bounty posters below. Countdown pill shows when the next dailies arrive. |
 | **Star-Forge** | ✅ | **Anvil scene.** A shelf of 8 relic tiles (undiscovered = dark silhouette + "?", equipped = green bag badge). The selected relic sits on an anvil under **5 star sockets** (the next one pulses orange). Success chance is a huge % with a bar whose orange end is the **pity "heat"** from failed strikes. The detail card has the effect, the next star's bonus, the cost (red when short), **🔨 STRIKE!**, and small Guard (Safeguard) / Start-with toggles. STRIKE swings a hammer 3 times (`Forge_Hammer1–3` + sparks), then a star slams into its socket (`Forge_Success` + bursts) or smoke puffs (`Forge_Fail`) and the heat pours in. Tested on real server data: a 90% fail, then a 100% success. |
-| **Blacksmith** | 🔨 next | **Weapon rack.** 8 weapons hang on a wooden wall. Owned ones are bright, locked ones are black silhouettes with a price tag (Dust + Cores icons). Tapping one opens a card with Attack / Q / Passive icons and a Forge button (hammer). Equipped weapon gets a glowing frame. |
-| **Legion Hall** | ⬜ | **Weapon carousel** with a big **Mastery ring** around the weapon icon (XP progress as a radial ring, level in the middle). **6 link-gem sockets** along the bottom: drag / tap a weapon's Link gem into a socket. Locked sockets show the Mastery needed. |
+| **Blacksmith** | ✅ | **Weapon rack.** 8 weapons hang on pegs on a wooden wall: owned ones glow in their accent colour with an M-level badge, never-forged ones are black silhouettes with a lock, Rebirth-switched-off ones are grey with an OFF tag, and the equipped one has a green ✔. The detail card underneath shows the big icon, 3 stat chips (damage, attacks/s, Q cooldown), the passive + Q name, the cost (red when short) and one action button. Tested: browsing, locked costs, Equip round-trip (Greatsword ⇄ Staff). |
+| **Legion Hall** | 🔨 next | **Weapon carousel** with a big **Mastery ring** around the weapon icon (XP progress as a radial ring, level in the middle). **6 link-gem sockets** along the bottom: drag / tap a weapon's Link gem into a socket. Locked sockets show the Mastery needed. |
 | **Hall of Champions** | ⬜ | **Podium** with the top 3 as avatar headshots (gold / silver / bronze pedestals), ranks 4–10 as hanging ribbons, 3 board tabs as banners. The player's own rank is pinned at the bottom. |
 | **Rebirth** | ⬜ | **Before → After split.** Left is "now" (level, multiplier), right is "after" (new multiplier, +Sparks in huge gold), with a big pulsing portal button in the middle. Standard vs Keep-Everything as 2 big choice cards. |
 | **Bag** | ⬜ | **Paper doll.** Character silhouette with Weapon, Starting Relic(s) and Link Skill slots around it; a live stat summary with icons; an inventory grid below with 1-tap equip. |
@@ -266,6 +267,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | B11 | Medium | Open | Section 2.2's popup / combo / "Label"-flash HUD glitches are still unfixed. Popups may cover the new, bigger station window. |
 | B12 | High | ✅ Fixed | *Broken Crown* (`REL_07`) `Desc` had literal `+35%` / `50%` in a `string.format` string, so `Describe` threw "missing argument #3": the old Star-Forge panel errored, and the **server** errored when announcing a new Broken Crown or a star-up. Escaped as `%%`. Lesson: any `%` in a relic `Desc` must be written `%%`. |
 | B13 | Low | Open | The Star-Forge's test profile was spent down in testing (Broken Crown 1★ → 2★, 10 Shards and 500 Dust used). Harmless in Studio. |
+| B15 | Low | Unverified | The Blacksmith's "just forged" flare + `Forge_Success` were not run on real data (it would have spent the test profile's only 2 Boss Cores and permanently unlocked the Bow). Same detection pattern as the Sanctum and Star-Forge, which do work. |
+| B16 | Low | Note | Station-panel toasts ("Greatsword equipped") appear on top of the window header. That's B11 in action; it doesn't block anything. |
 | B14 | Low | Watch | If the server refuses a strike (cooldown, a run started), the forge waits ~4s then re-enables STRIKE; the hammer still swings first. That's fine, but a refusal message comes only as the normal Notify toast. |
 
 ### 5.4 Leftover Deliverables (Checklist)
@@ -274,8 +277,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 - [x] Spark Sanctum skill tree
 - [x] Quest Board cards + bounty posters
 - [x] Star-Forge anvil scene
-- [ ] Blacksmith weapon rack *(next)*
-- [ ] Legion Hall carousel + link-gem sockets
+- [x] Blacksmith weapon rack
+- [ ] Legion Hall carousel + link-gem sockets *(next)*
 - [ ] Hall of Champions podium
 - [ ] Rebirth before → after
 - [ ] Bag paper doll (replaces 2.2 item 2)
