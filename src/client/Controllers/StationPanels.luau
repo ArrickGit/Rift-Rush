@@ -1,14 +1,14 @@
 --!strict
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
--- The loadout panels UIController shows in its station window (game.md Steps SP-2 / SP-3 / SP-5 / SP-6):
---   the Bag (Inventory, usable anywhere). The Spark Sanctum and Quest Board (StationScenes), the Star-Forge
---   (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall (LegionScene), the Hall of Champions
---   (HallScene) and the Rebirth pedestal (RebirthScene) are drawn as scenes and routed through Renderers here.
--- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards).
+-- Routes UIController's station window to the scene modules that draw each station: the Spark Sanctum and Quest
+-- Board (StationScenes), the Star-Forge (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall
+-- (LegionScene), the Hall of Champions (HallScene), the Rebirth pedestal (RebirthScene) and the Bag (BagScene).
+-- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards) and the HUD's
+-- run relic / curse line.
 --
--- UIController owns the window and passes its drawing helpers in as a kit (Init); renderers draw into kit.content()
--- and every button fires a validated remote (LoadoutAction, StarForce, ClaimQuest). Kept apart from UIController
--- so neither module comes near Luau's 200-local limit.
+-- UIController owns the window and passes its drawing helpers in as a kit (Init); scenes draw into kit.content()
+-- and every button fires a validated remote (LoadoutAction, StarForce, ClaimQuest, ...). Kept apart from
+-- UIController so neither module comes near Luau's 200-local limit.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17,8 +17,7 @@ local TweenService = game:GetService("TweenService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CurseConfig = require(Shared:WaitForChild("CurseConfig"))
 local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
-local Remotes = require(Shared:WaitForChild("Remotes"))
-local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local BagScene = require(script.Parent:WaitForChild("BagScene"))
 local BlacksmithScene = require(script.Parent:WaitForChild("BlacksmithScene"))
 local HallScene = require(script.Parent:WaitForChild("HallScene"))
 local LegionScene = require(script.Parent:WaitForChild("LegionScene"))
@@ -34,7 +33,6 @@ local StationPanels = {}
 
 local player = Players.LocalPlayer
 local K: any = nil -- UIController's kit, set by Init
-local loadoutRemote: RemoteEvent
 
 local celebrateFrame: Frame
 local celebrateIcon: TextLabel
@@ -43,272 +41,6 @@ local celebrateBody: TextLabel
 local celebrateStroke: UIStroke
 local celebrateQueue: { Payload } = {}
 local celebrating = false
-
--- Loadout panels (Blacksmith, Legion Hall, Star-Forge, Bag) ------------------------------------------------------
-
-type RowButton = { Text: string, Color: Color3, Enabled: boolean, OnClick: () -> () }
-
-local LINK_STAT_NAMES: { [string]: string } = {
-	NormalEliteDamage = "Normal & Elite Dmg",
-	CritDamage = "Crit Damage",
-	StatusDamageDuration = "Status Dmg & Duration",
-	CritRate = "Crit Rate",
-	BossDamage = "Boss Damage",
-	AttackSpeedCooldown = "Atk Speed & CDR",
-	DustDropRate = "Rift Dust Find",
-	RareUpgradeRate = "Rare/Epic Upgrades",
-}
-local REACTIVATION_FEE_FRACTION = 0.25 -- mirrors RebirthService (display only)
-
-local function loadoutAction(action: string, fields: Payload)
-	local payload = table.clone(fields)
-	payload.Action = action
-	loadoutRemote:FireServer(payload)
-end
-
-local function profileTable(key: string): { [any]: any }
-	local data = K.profile()
-	local value = if data then data[key] else nil
-	return if type(value) == "table" then value else {}
-end
-
-local function profileNumber(key: string): number
-	local data = K.profile()
-	return if data then tonumber(data[key]) or 0 else 0
-end
-
--- (level, xp, paragon) of a weapon's Mastery, preferring the live MasteryUpdated numbers for the equipped weapon.
-local function masteryOf(weaponId: string): (number, number, number)
-	local live = K.liveMastery()
-	if live and live.Weapon == weaponId then
-		return live.Level, live.XP, live.Paragon
-	end
-	local entry = profileTable("WeaponMastery")[weaponId]
-	if type(entry) ~= "table" then
-		return 1, 0, 0
-	end
-	return tonumber(entry.Level) or 1, tonumber(entry.XP) or 0, tonumber(entry.ParagonRank) or 0
-end
-
-local function masteryRequired(level: number, paragon: number): number
-	return WeaponConfig.GetMasteryXPRequired(if level >= WeaponConfig.MAX_MASTERY then WeaponConfig.MAX_MASTERY + paragon else level)
-end
-
-local function masteryText(level: number, xp: number, paragon: number): string
-	local required = masteryRequired(level, paragon)
-	local rank = if paragon > 0 then ("Paragon %d"):format(paragon) else ("Mastery %d"):format(level)
-	return ("%s · %s / %s XP"):format(rank, K.formatNumber(xp), K.formatNumber(required))
-end
-
-local function stars(count: number): string
-	return string.rep("★", count) .. string.rep("☆", RelicConfig.MAX_STARS - count)
-end
-
--- A row like itemRow, with any number of buttons on the right (and an optional taller body for long text).
-local function actionRow(order: number, title: string, desc: string, buttons: { RowButton }, height: number?)
-	local rowHeight = height or 78
-	local buttonWidth = 132
-	local reserved = #buttons * (buttonWidth + 8) + 6
-	local frame: Frame = K.create("Frame", { Size = UDim2.new(1, -6, 0, rowHeight), BackgroundColor3 = K.COLORS.PanelLight,
-		LayoutOrder = order }, K.content())
-	K.round(frame, 12)
-	K.outline(frame, K.COLORS.Stroke, 2.5)
-	K.topLit(frame, 0.78)
-	K.pad(frame, 10)
-	K.newLabel(frame, { Size = UDim2.new(1, -reserved, 0, 22), Text = title, Font = K.DISPLAY_FONT, TextSize = 18,
-		TextStrokeTransparency = 0.2, TextTruncate = Enum.TextTruncate.AtEnd })
-	K.newLabel(frame, { Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, -reserved, 1, -24), Text = desc,
-		TextColor3 = K.COLORS.Muted, TextSize = 13, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
-	for index, spec in buttons do
-		local button = K.newButton(frame, spec.Text, spec.Color, spec.OnClick, { AnchorPoint = Vector2.new(1, 0.5),
-			Position = UDim2.new(1, -(#buttons - index) * (buttonWidth + 8), 0.5, 0), Size = UDim2.fromOffset(buttonWidth, 42),
-			TextSize = 15 })
-		K.setEnabled(button, spec.Enabled, spec.Color)
-	end
-end
-
-local function weaponButtons(weaponId: string, allowForge: boolean): { RowButton }
-	local info = WeaponConfig.Weapons[weaponId]
-	local state = profileTable("UnlockedWeapons")[weaponId]
-	local equipped = K.profile() ~= nil and (K.profile() :: Payload).EquippedWeapon == weaponId
-	if state == true then
-		if equipped then
-			return { { Text = "✔ Equipped", Color = K.COLORS.Good, Enabled = false, OnClick = function() end } }
-		end
-		return { { Text = "Equip", Color = K.COLORS.Accent, Enabled = not K.inRun(), OnClick = function()
-			loadoutAction("Equip", { Weapon = weaponId })
-		end } }
-	end
-	if not allowForge then
-		return { { Text = "🔒 Blacksmith", Color = K.COLORS.PanelLight, Enabled = false, OnClick = function() end } }
-	end
-	local dust, cores = info.UnlockCost, info.UnlockCores
-	local label: string
-	if state == false then
-		dust, cores = math.round(info.UnlockCost * REACTIVATION_FEE_FRACTION), 0
-		label = ("Reactivate · %s %s"):format(K.formatNumber(dust), K.currencyIcon("RiftDust"))
-	else
-		label = ("Forge · %s%s %d%s"):format(K.formatNumber(dust), K.currencyIcon("RiftDust"), cores, K.currencyIcon("BossCores"))
-	end
-	local affordable = profileNumber("RiftDust") >= dust and profileNumber("BossCores") >= cores
-	return { { Text = label, Color = K.COLORS.Gold, Enabled = affordable and not K.inRun(), OnClick = function()
-		loadoutAction("Unlock", { Weapon = weaponId })
-	end } }
-end
-
-local function weaponDesc(info: WeaponConfig.WeaponInfo): string
-	local ability = info.Ability
-	return ("%d dmg · %.1f atk/s · <b>Q</b> %s · <b>%s</b>: %s"):format(info.BaseDamage, info.AttacksPerSecond,
-		if ability then ability.Name else "—", info.PassiveName, info.PassiveDesc)
-end
-
-local function linkSlots(): number
-	local nodes = profileTable("AscensionNodes")
-	return WeaponConfig.GetLinkSlots(tonumber(nodes.AS_T3_04) or 0, player:GetAttribute("HasExtraLinkSlots") == true)
-end
-
-local function linkRow(order: number, weaponId: string)
-	local info = WeaponConfig.Weapons[weaponId]
-	local link = info.Link
-	local level, xp, paragon = masteryOf(weaponId)
-	local active = profileTable("ActiveLinkSkills")
-	local equipped = table.find(active, link.Id) ~= nil
-	local value = WeaponConfig.GetLinkValue(weaponId, level)
-	local tier = if level >= WeaponConfig.LINK_TIER2_LEVEL then "Tier 2" elseif level >= WeaponConfig.LINK_TIER1_LEVEL then "Tier 1" else "Locked"
-	local title = ("%s %s  <font color='#%s'>%s%s</font>"):format(info.Icon, link.Name, K.COLORS.Muted:ToHex(), tier,
-		if value > 0 then (" · +%d%% %s"):format(math.round(value * 100), LINK_STAT_NAMES[link.Stat] or link.Stat) else "")
-	local desc = ("%s %s · +%d%% / +%d%% %s at Mastery 10 / 20"):format(info.Name, masteryText(level, xp, paragon),
-		math.round(link.Lv10 * 100), math.round(link.Lv20 * 100), LINK_STAT_NAMES[link.Stat] or link.Stat)
-	local button: RowButton
-	if level < WeaponConfig.LINK_TIER1_LEVEL then
-		button = { Text = ("🔒 Mastery %d"):format(WeaponConfig.LINK_TIER1_LEVEL), Color = K.COLORS.PanelLight, Enabled = false,
-			OnClick = function() end }
-	elseif equipped then
-		button = { Text = "Unequip", Color = K.COLORS.Bad, Enabled = not K.inRun(), OnClick = function()
-			loadoutAction("UnequipLink", { Link = link.Id })
-		end }
-	else
-		button = { Text = "Equip Link", Color = K.COLORS.Accent, Enabled = #active < linkSlots() and not K.inRun(), OnClick = function()
-			loadoutAction("EquipLink", { Link = link.Id })
-		end }
-	end
-	actionRow(order, title, desc, { button })
-end
-
-local function relicSlots(): number
-	local nodes = profileTable("AscensionNodes")
-	return RelicConfig.GetStartingSlots(tonumber(nodes.AS_T3_03) or 0, player:GetAttribute("HasRelicVaultKey") == true)
-end
-
-local function relicRow(order: number, relicId: string)
-	local info = RelicConfig.Relics[relicId]
-	local owned = profileTable("RelicStars")[relicId]
-	if type(owned) ~= "table" then
-		actionRow(order, "❔ Undiscovered Relic", "Drops from bosses (Room 5: 35%, Room 10: guaranteed) and Treasure Chests (25%).", {}, 60)
-		return
-	end
-	local count = tonumber(owned.Stars) or 1
-	local equipped = table.find(profileTable("EquippedStartingRelics"), relicId) ~= nil
-	local buttons: { RowButton } = {}
-	if equipped then
-		table.insert(buttons, { Text = "Unequip", Color = K.COLORS.Bad, Enabled = not K.inRun(), OnClick = function()
-			loadoutAction("UnequipRelic", { Relic = relicId })
-		end })
-	else
-		table.insert(buttons, { Text = "Start With", Color = K.COLORS.Accent,
-			Enabled = #profileTable("EquippedStartingRelics") < relicSlots() and not K.inRun(), OnClick = function()
-				loadoutAction("EquipRelic", { Relic = relicId })
-			end })
-	end
-	actionRow(order, ("%s %s  <font color='#%s'>%s</font>%s"):format(info.Icon, info.Name, K.COLORS.Gold:ToHex(), stars(count),
-		if equipped then "  🎒" else ""), RelicConfig.Describe(relicId, count), buttons, 96)
-end
-
--- The Bag: loadout at a glance, usable anywhere (I / B / Select or the HUD button). Changes are town-only.
-local function renderInventory()
-	local data = K.profile()
-	if not data then
-		K.paragraph(1, "Loading…", K.COLORS.Muted)
-		return
-	end
-	local weapon = WeaponConfig.Weapons[data.EquippedWeapon] or WeaponConfig.Weapons[WeaponConfig.DEFAULT_WEAPON]
-	local level, xp, paragon = masteryOf(weapon.Id)
-	K.section(1, ("%s %s  ·  equipped"):format(weapon.Icon, weapon.Name))
-	local bar = K.newBar(K.content(), weapon.Accent, 2)
-	K.setBar(bar, xp / math.max(1, masteryRequired(level, paragon)), masteryText(level, xp, paragon))
-	K.paragraph(3, weaponDesc(weapon))
-	local order = 3
-	if K.inRun() then
-		order += 1
-		K.section(order, "This Run")
-		local relicText: { string } = {}
-		local runRelics = player:GetAttribute("RunRelics")
-		if type(runRelics) == "string" then
-			for entry in runRelics:gmatch("[^,]+") do
-				local id, count = entry:match("^(.-):(%d+)$")
-				local info = if id then RelicConfig.Relics[id] else nil
-				if info and id and count then
-					table.insert(relicText, ("%s <b>%s</b> %s — %s"):format(info.Icon, info.Name, stars(tonumber(count) or 1),
-						RelicConfig.Describe(id, tonumber(count) or 1)))
-				end
-			end
-		end
-		local curses = player:GetAttribute("RunCurses")
-		if type(curses) == "string" then
-			for id in curses:gmatch("[^,]+") do
-				local curse = CurseConfig.Curses[id]
-				if curse then
-					table.insert(relicText, ("%s <b>%s</b>: %s, %s"):format(curse.Icon, curse.Name, curse.Boon, curse.Bane))
-				end
-			end
-		end
-		order += 1
-		K.paragraph(order, if #relicText > 0 then table.concat(relicText, "\n") else "No relics or curses yet — bosses, chests and Rift Shrines grant them.")
-		order += 1
-		K.paragraph(order, "Loadout changes unlock when you are back in Haven Outpost.", K.COLORS.Muted)
-	end
-	order += 1
-	K.section(order, "Weapons")
-	for _, weaponId in WeaponConfig.Order do
-		if profileTable("UnlockedWeapons")[weaponId] ~= nil then
-			local info = WeaponConfig.Weapons[weaponId]
-			local wLevel, wXP, wParagon = masteryOf(weaponId)
-			order += 1
-			actionRow(order, ("%s %s"):format(info.Icon, info.Name), masteryText(wLevel, wXP, wParagon), weaponButtons(weaponId, false), 64)
-		end
-	end
-	order += 1
-	K.paragraph(order, "Forge more weapons at the ⚒️ Blacksmith.", K.COLORS.Muted)
-	order += 1
-	K.section(order, ("Link Skills  ·  %d / %d slots"):format(#profileTable("ActiveLinkSkills"), linkSlots()))
-	local anyLink = false
-	for _, weaponId in WeaponConfig.Order do
-		local wLevel = masteryOf(weaponId)
-		if wLevel >= WeaponConfig.LINK_TIER1_LEVEL then
-			anyLink = true
-			order += 1
-			linkRow(order, weaponId)
-		end
-	end
-	if not anyLink then
-		order += 1
-		K.paragraph(order, "Reach Mastery 10 with any weapon to unlock its Link Skill.", K.COLORS.Muted)
-	end
-	order += 1
-	K.section(order, ("Starting Relics  ·  %d / %d"):format(#profileTable("EquippedStartingRelics"), relicSlots()))
-	local anyRelic = false
-	for _, relicId in RelicConfig.Order do
-		if profileTable("RelicStars")[relicId] then
-			anyRelic = true
-			order += 1
-			relicRow(order, relicId)
-		end
-	end
-	if not anyRelic then
-		order += 1
-		K.paragraph(order, "Relics drop from bosses and chests. Star-Force them at the 🔨 Star-Forge.", K.COLORS.Muted)
-	end
-end
 
 -- Big centre-screen banner for new relics, Mastery levels / Link Skills and quest rewards; shown one at a time.
 local function showNextCelebration()
@@ -399,7 +131,7 @@ StationPanels.Renderers = {
 	SparkSanctum = StationScenes.Renderers.SparkSanctum,
 	HallOfChampions = HallScene.Render,
 	AscensionPedestal = RebirthScene.Render,
-	Inventory = renderInventory,
+	Inventory = BagScene.Render,
 } :: { [string]: () -> () }
 
 StationPanels.Celebrate = celebrate
@@ -413,7 +145,6 @@ end
 
 function StationPanels.Init(kit: any)
 	K = kit
-	loadoutRemote = Remotes.GetEvent("LoadoutAction")
 	buildCelebration()
 	SceneKit.Init(kit)
 	StationScenes.Init(kit)
@@ -422,6 +153,7 @@ function StationPanels.Init(kit: any)
 	LegionScene.Init(kit)
 	HallScene.Init(kit)
 	RebirthScene.Init(kit)
+	BagScene.Init(kit)
 end
 
 return StationPanels
