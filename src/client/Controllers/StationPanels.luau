@@ -1,9 +1,9 @@
 --!strict
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
 -- The loadout panels UIController shows in its station window (game.md Steps SP-2 / SP-3 / SP-5 / SP-6):
---   Hall of Champions and the Bag (Inventory, usable anywhere). The Spark Sanctum and Quest Board (StationScenes),
---   the Star-Forge (StarForgeScene), the Blacksmith (BlacksmithScene) and the Legion Hall (LegionScene) are drawn
---   as scenes and routed through Renderers here.
+--   the Bag (Inventory, usable anywhere). The Spark Sanctum and Quest Board (StationScenes), the Star-Forge
+--   (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall (LegionScene) and the Hall of Champions
+--   (HallScene) are drawn as scenes and routed through Renderers here.
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards).
 --
 -- UIController owns the window and passes its drawing helpers in as a kit (Init); renderers draw into kit.content()
@@ -20,6 +20,7 @@ local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 local BlacksmithScene = require(script.Parent:WaitForChild("BlacksmithScene"))
+local HallScene = require(script.Parent:WaitForChild("HallScene"))
 local LegionScene = require(script.Parent:WaitForChild("LegionScene"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
@@ -222,42 +223,6 @@ local function relicRow(order: number, relicId: string)
 		if equipped then "  🎒" else ""), RelicConfig.Describe(relicId, count), buttons, 96)
 end
 
-local MEDALS = { "🥇", "🥈", "🥉" }
-
-local function boardValue(format: string, value: number): string
-	if format == "Room" then
-		return ("Room %d"):format(value)
-	elseif format == "Power" then
-		local tier, level = value // 1000, value % 1000
-		return if tier > 0 then ("Rebirth %s · Lv %d"):format(K.toRoman(tier), level) else ("Lv %d"):format(level)
-	end
-	return K.formatNumber(value)
-end
-
-local function renderHallOfChampions()
-	local boards = K.stationData()
-	if type(boards) ~= "table" then
-		K.paragraph(1, "Loading…", K.COLORS.Muted)
-		return
-	end
-	local order = 0
-	for _, board in boards do
-		order += 1
-		K.section(order, ("%s %s"):format(tostring(board.Icon), tostring(board.Title)))
-		local lines: { string } = {}
-		for _, entry in board.Entries or {} do
-			table.insert(lines, ("%s  <b>%s</b>   <font color='#%s'>%s</font>"):format(MEDALS[entry.Rank] or ("#%d"):format(entry.Rank),
-				tostring(entry.Name), K.COLORS.Gold:ToHex(), boardValue(board.Format, tonumber(entry.Value) or 0)))
-		end
-		if #lines == 0 then
-			table.insert(lines, "No champions yet — be the first!")
-		end
-		table.insert(lines, ("<font color='#%s'>You: %s</font>"):format(K.COLORS.XP:ToHex(), boardValue(board.Format, tonumber(board.You) or 0)))
-		order += 1
-		K.paragraph(order, table.concat(lines, "\n"))
-	end
-end
-
 -- The Bag: loadout at a glance, usable anywhere (I / B / Select or the HUD button). Changes are town-only.
 local function renderInventory()
 	local data = K.profile()
@@ -431,7 +396,7 @@ StationPanels.Renderers = {
 	StarForge = StarForgeScene.Render,
 	QuestBoard = StationScenes.Renderers.QuestBoard,
 	SparkSanctum = StationScenes.Renderers.SparkSanctum,
-	HallOfChampions = renderHallOfChampions,
+	HallOfChampions = HallScene.Render,
 	Inventory = renderInventory,
 } :: { [string]: () -> () }
 
@@ -440,6 +405,7 @@ StationPanels.Sfx = Sfx
 function StationPanels.Reset()
 	StationScenes.Reset()
 	StarForgeScene.Reset()
+	HallScene.Reset()
 end
 
 function StationPanels.Init(kit: any)
@@ -451,6 +417,7 @@ function StationPanels.Init(kit: any)
 	StarForgeScene.Init(kit)
 	BlacksmithScene.Init(kit)
 	LegionScene.Init(kit)
+	HallScene.Init(kit)
 end
 
 return StationPanels

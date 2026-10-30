@@ -12,7 +12,7 @@ local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"
 
 type PlayerProfileData = PlayerDataService.PlayerProfileData
 
-export type Entry = { Rank: number, Name: string, Value: number }
+export type Entry = { Rank: number, Name: string, Value: number, UserId: number } -- UserId: for avatar headshots
 export type Board = { Key: string, Title: string, Icon: string, Format: string, Entries: { Entry }, You: number }
 
 type BoardSpec = { Key: string, Title: string, Icon: string, Format: string, Score: (PlayerProfileData) -> number }
@@ -86,11 +86,11 @@ end
 
 -- Ranks the players in this server (Studio fallback).
 local function localEntries(spec: BoardSpec): { Entry }
-	local rows: { { Name: string, Value: number } } = {}
+	local rows: { { Name: string, Value: number, UserId: number } } = {}
 	for _, player in Players:GetPlayers() do
 		local profile = PlayerDataService.Get(player)
 		if profile then
-			table.insert(rows, { Name = player.DisplayName, Value = spec.Score(profile) })
+			table.insert(rows, { Name = player.DisplayName, Value = spec.Score(profile), UserId = player.UserId })
 		end
 	end
 	table.sort(rows, function(a, b)
@@ -98,7 +98,7 @@ local function localEntries(spec: BoardSpec): { Entry }
 	end)
 	local entries: { Entry } = {}
 	for index = 1, math.min(TOP_COUNT, #rows) do
-		table.insert(entries, { Rank = index, Name = rows[index].Name, Value = rows[index].Value })
+		table.insert(entries, { Rank = index, Name = rows[index].Name, Value = rows[index].Value, UserId = rows[index].UserId })
 	end
 	return entries
 end
@@ -116,7 +116,7 @@ local function fetch(spec: BoardSpec): { Entry }
 			local page = store:GetSortedAsync(false, TOP_COUNT):GetCurrentPage()
 			for index, row in page do
 				local userId = tonumber(row.key) or 0
-				table.insert(entries, { Rank = index, Name = nameOf(userId), Value = row.value })
+				table.insert(entries, { Rank = index, Name = nameOf(userId), Value = row.value, UserId = userId })
 			end
 		end)
 	end
