@@ -3,7 +3,7 @@
 -- Routes UIController's station window to the scene modules that draw each station: the Spark Sanctum and Quest
 -- Board (StationScenes), the Star-Forge (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall
 -- (LegionScene), the Hall of Champions (HallScene), the Rebirth pedestal (RebirthScene), the Bag (BagScene) and
--- the Central Rift Gate (RiftGateScene).
+-- the Central Rift Gate (RiftGateScene), plus the Settings & Credits screen (SettingsScene).
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards) and the HUD's
 -- run relic / curse line.
 --
@@ -24,6 +24,7 @@ local HallScene = require(script.Parent:WaitForChild("HallScene"))
 local LegionScene = require(script.Parent:WaitForChild("LegionScene"))
 local RebirthScene = require(script.Parent:WaitForChild("RebirthScene"))
 local RiftGateScene = require(script.Parent:WaitForChild("RiftGateScene"))
+local SettingsScene = require(script.Parent:WaitForChild("SettingsScene"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 local StarForgeScene = require(script.Parent:WaitForChild("StarForgeScene"))
@@ -135,9 +136,11 @@ StationPanels.Renderers = {
 	AscensionPedestal = RebirthScene.Render,
 	Inventory = BagScene.Render,
 	RiftGate = RiftGateScene.Render,
+	Settings = SettingsScene.Render,
 } :: { [string]: () -> () }
 
 StationPanels.Celebrate = celebrate
+StationPanels.ApplySettings = SettingsScene.ApplySettings
 StationPanels.Sfx = Sfx
 function StationPanels.Reset()
 	StationScenes.Reset()
@@ -158,6 +161,7 @@ function StationPanels.Init(kit: any)
 	RebirthScene.Init(kit)
 	BagScene.Init(kit)
 	RiftGateScene.Init(kit)
+	SettingsScene.Init(kit)
 end
 
 return StationPanels

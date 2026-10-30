@@ -30,6 +30,7 @@ local EVENTS = {
 	"ClaimQuest", -- C->S: quest id to claim at the Quest Board (QuestService)
 	"MasteryUpdated", -- S->C: { Weapon, Level, XP, Paragon, Required, LevelUp?, LinkTier? } after Mastery XP is awarded
 	"Celebrate", -- S->C: { Kind = "Relic" | "Mastery" | "Quest", Title, Body, Icon, Color } big centre-screen banner
+	"SaveSettings", -- C->S: { SfxVolume, ScreenShake } from the Settings screen (PlayerDataService)
 }
 
 local FUNCTIONS = {

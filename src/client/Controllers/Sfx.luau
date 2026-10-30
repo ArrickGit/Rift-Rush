@@ -16,10 +16,15 @@ local DEFAULT_VOLUME = 0.5
 
 local sounds: { [string]: Sound } = {}
 local lastPlayed: { [string]: number } = {}
+local volumeScale = 1 -- the Settings screen's SFX volume
+
+function Sfx.SetVolumeScale(scale: number)
+	volumeScale = math.clamp(scale, 0, 1)
+end
 
 function Sfx.Play(name: string, volume: number?, pitch: number?)
 	local id = AssetRegistry.Sounds[name]
-	if not id or id == "" then
+	if not id or id == "" or volumeScale <= 0 then
 		return
 	end
 	local now = os.clock()
@@ -36,7 +41,7 @@ function Sfx.Play(name: string, volume: number?, pitch: number?)
 		sounds[name] = created
 		sound = created
 	end
-	sound.Volume = volume or DEFAULT_VOLUME
+	sound.Volume = (volume or DEFAULT_VOLUME) * volumeScale
 	sound.PlaybackSpeed = pitch or 1
 	sound.TimePosition = 0
 	sound:Play()

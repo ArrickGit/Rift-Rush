@@ -133,7 +133,16 @@ function Camera25DController.ClearBounds()
 end
 
 -- Linearly decaying shake; a weaker shake never overrides a stronger one still in progress.
+local shakeEnabled = true -- the Settings screen's Screen Shake toggle
+
+function Camera25DController.SetShakeEnabled(enabled: boolean)
+	shakeEnabled = enabled
+end
+
 function Camera25DController.Shake(intensity: number, duration: number)
+	if not shakeEnabled then
+		return
+	end
 	local remaining = if shakeTimeLeft > 0 then shakeIntensity * (shakeTimeLeft / shakeDuration) else 0
 	if intensity >= remaining and duration > 0 then
 		shakeIntensity, shakeDuration, shakeTimeLeft = intensity, duration, duration

@@ -190,8 +190,12 @@ local function weaponCard(parent: Instance, weapon: WeaponConfig.WeaponInfo)
 	local card = K.newPanel(parent, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.38, 0, 1, 0),
 		BackgroundColor3 = BAG_COLORS.Card })
 	K.pad(card, 10)
-	K.newLabel(card, { Size = UDim2.new(1, 0, 0, 26), Text = weapon.Name, Font = K.DISPLAY_FONT, TextSize = 23, TextColor3 = weapon.Accent,
+	K.newLabel(card, { Size = UDim2.new(1, -44, 0, 26), Text = weapon.Name, Font = K.DISPLAY_FONT, TextSize = 23, TextColor3 = weapon.Accent,
 		TextStrokeTransparency = 0 })
+	SceneKit.pill(card, "⚙", Color3.fromHex("4a5070"), true, function()
+		Sfx.Play("UI_Click", 0.5)
+		K.openStation("Settings")
+	end, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(38, 28), TextSize = 18 })
 	local level, xp, paragon = masteryOf(weapon.Id)
 	local required = WeaponConfig.GetMasteryXPRequired(if level >= WeaponConfig.MAX_MASTERY then WeaponConfig.MAX_MASTERY + paragon else level)
 	local track: Frame = K.create("Frame", { Position = UDim2.fromOffset(0, 32), Size = UDim2.new(1, 0, 0, 16),

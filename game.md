@@ -222,7 +222,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | 2026-10-30 | `8e64c65` | `game-like-ui` | **Hall of Champions → podium** (`HallScene.luau`): banner tabs for the 3 boards, top 3 on gold / silver / bronze pedestals that rise in, with avatar headshots (`rbxthumb://` — no web calls) and a crowned, glowing #1, ranks 4–10 in a two-column list, and a "You" bar with your score and rank. Server: `LeaderboardService` entries now carry `UserId` (display only). |
 | 2026-10-30 | `b99fe86` | `game-like-ui` | **Rebirth → before / after** (`RebirthScene.luau`): Hunter Level bar racing to the required level with a portal that glows **READY!**, NOW vs AFTER cards (Damage & HP, Dust & XP multipliers, +Sparks) with a pulsing », Standard / Keep Everything choice cards whose buttons **need a second tap to confirm** (the old panel rebirthed on one click) or say why they're locked, and the Robux options as pills. The renderer moved out of `UIController` (−89 lines, −3 locals: `renderPedestal`, `itemRow`, `rebirthRemote`); the kit now passes `requestPurchase`. |
 | 2026-10-30 | `54cd527` | `game-like-ui` | **Bag → paper doll** (`BagScene.luau`): your full-body avatar with the weapon slot (M-badge) on one side, Starting Relic slots (filled / "+" / locked) on the other and Link gems underneath; a weapon card with Mastery bar and stat chips; a "This run" strip of relics and curses during runs; a quick-swap grid (tap a weapon to equip, tap a relic to toggle start-with; town only). **All 8 station windows are now scenes**; `StationPanels` is just routing + the Celebrate banner (≈420 → 159 lines, old list helpers deleted). |
-| 2026-10-30 | *(next commit)* | `game-like-ui` | **Rift Gate → world map** (`RiftGateScene.luau`): 8 islands on a snaking dotted path over a starfield (open worlds glow in their colour with a Corruption badge, locked worlds show a padlock, unbuilt worlds 2–8 are shadowed "SOON" with their planned names), a Corruption dial (big tier, −10/−1/+1/+10 pills, reward multiplier in gold; a "beat the Room 10 boss" hint until it unlocks), and a portal panel with **Open Portal**. `UIController` keeps `startRun(world, corruption)` and passes it through the kit (−95 lines; `renderRiftGate`, `selectedWorld`, `selectedCorruption`, `unlockedTierFor`, `MAX_WORLDS` removed). Disabled `SceneKit.pill`s now look clearly greyed out. |
+| 2026-10-30 | `fa8630c` | `game-like-ui` | **Rift Gate → world map** (`RiftGateScene.luau`): 8 islands on a snaking dotted path over a starfield (open worlds glow in their colour with a Corruption badge, locked worlds show a padlock, unbuilt worlds 2–8 are shadowed "SOON" with their planned names), a Corruption dial (big tier, −10/−1/+1/+10 pills, reward multiplier in gold; a "beat the Room 10 boss" hint until it unlocks), and a portal panel with **Open Portal**. `UIController` keeps `startRun(world, corruption)` and passes it through the kit (−95 lines; `renderRiftGate`, `selectedWorld`, `selectedCorruption`, `unlockedTierFor`, `MAX_WORLDS` removed). Disabled `SceneKit.pill`s now look clearly greyed out. |
+| 2026-10-30 | *(next commit)* | `game-like-ui` | **Settings & Credits screen** (`SettingsScene.luau`, opened from the ⚙ in the Bag, works in runs too): SFX volume (Off / 25 / 50 / 75 / 100 %) and Screen Shake (On / Off) as big pills, saved with the profile via a new `SaveSettings` remote (validated in `PlayerDataService`; new `Settings` profile field, existing saves get defaults), applied on every profile update (`Sfx.SetVolumeScale`, `Camera25DController.SetShakeEnabled`). The **Credits** card names the game-icons.net authors (CC BY 3.0) and Kenney (CC0), **fixing B3**. |
 
 ### 5.2 Game-Like UI Redesign (Branch `game-like-ui`)
 
@@ -247,7 +248,9 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | **Rebirth** | ✅ | **Before → After.** Level bar + READY portal, NOW / AFTER cards with big multipliers and +Sparks, two choice cards with icon lines (what resets, what's kept) and a **two-tap confirm**, Robux pills (Instant only shows while you're not eligible). Tested with real data (Lv 8 / 50) and a mocked eligible preview (first tap → "Tap again to Rebirth!"; the second tap was deliberately not sent). |
 | **Bag** | ✅ | **Paper doll** (replaces the 2.2 "UIPack inventory template" plan). Avatar + weapon slot + Starting Relic slots + Link gems, a weapon stat card, a run strip (relics with stars, curses) while in a run, and a tap-to-swap grid of owned weapons and relics. Tested in town: render, relic toggle on and off (pop into the slot), no errors. *Not yet seen:* the in-run strip (B23). | **Paper doll.** Character silhouette with Weapon, Starting Relic(s) and Link Skill slots around it; a live stat summary with icons; an inventory grid below with 1-tap equip. |
 | **Rift Gate** | ✅ | **World map** (see changelog). Tested: render, Open Portal really starts a run (RunId set, window closes). *Not yet seen:* Corruption pills with a tier unlocked (B24). |
-| **Store / HUD** | ⬜ | Store cards with Robux badges (still a list inside `UIController.renderShop`), and the HUD fixes from 2.2. |
+| **Store** | ✅ (already) | Checked 2026-10-30: the Rift Shrine store was already a game-style screen (ShardUI illustrated cards, corner badges, green Robux price buttons, tab sidebar). No rebuild needed. |
+| **Settings & Credits** | ✅ | SFX volume + Screen Shake pills (saved to the profile, applied on join) and the Credits card. Open via ⚙ in the Bag. Tested: open, Screen Shake Off → saved on the server → On again. |
+| **HUD** | ⬜ | The 2.2 HUD fixes (popup overlap, combo overlap, "Label" flash). |
 
 **Tech notes for whoever continues:**
 * Each scene gets its own module (`StationScenes.luau` = Sanctum + Quest Board, `StarForgeScene.luau`, ...) using the shared helpers in `SceneKit.luau` (`tween`, `circle`, `icon`, `hoverGrow`, `burst`, `pill`, and an `overlay()` layer above the window where rotation renders). Route each scene through `StationPanels.Renderers`. **`UIController` is at Luau's 200-local limit**, so never add locals there.
@@ -262,7 +265,7 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | :--- | :--- | :--- | :--- |
 | B1 | Medium | Suspected | **Sounds not heard yet.** All 29 sounds preload with Success in Studio, but nobody has listened to them in a playtest. Volumes may need tuning (default 0.5). |
 | B2 | High (launch) | Open | **Asset ownership.** All images and sounds were uploaded under the personal account (userId 94633131). If the game is ever published under a **group**, the assets must be re-uploaded to the group or given permission, or they'll show blank or silent. |
-| B3 | High (legal) | Open | **game-icons.net is CC BY 3.0, which requires an in-game credit.** No credits screen exists yet. Credit text is in `assets/icons/picked/CREDITS.txt`. |
+| B3 | High (legal) | ✅ Fixed | **game-icons.net is CC BY 3.0, which requires an in-game credit.** No credits screen exists yet. Credit text is in `assets/icons/picked/CREDITS.txt`. |
 | B4 | Low | Probably OK | **Rojo drift risk.** Some Studio syncs were pushed in directly while the Rojo plugin wasn't connected. On 2026-10-30, Studio already matched `src/` before a manual push, so something is live-syncing again. Confirm the Rojo plugin says "Connected". |
 | B5 | Low | Accepted | Any Sparks spent on the 4 now-`ComingSoon` nodes before `8ac6b82` stay spent (levels kept, no effect). Respec refunds them. No live players yet, so this is harmless. |
 | B6 | Medium | Unverified | The Sanctum level-up burst and the Quest Board DONE-stamp were tested with **crafted** data. The test profile hasn't rebirthed, so a real buy has not been tested. |
@@ -284,6 +287,7 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | B23 | Low | Unverified | The Bag's "This run" strip (relic / curse icons from the `RunRelics` / `RunCurses` attributes) has not been viewed during a real run yet. |
 | B24 | Low | Unverified | Rift Gate Corruption pills / multiplier with a real unlocked tier: the test profile hasn't beaten Room 10, so only the "locked" hint has been seen. |
 | B25 | High (balance) | Confirmed again | An idle character in Room 1 died within seconds of a test run (Rift Collapse screen). Same issue as 2.4 / PL-4. Nothing was lost (empty pouch). |
+| B26 | Low | Open | Settings is only reachable through the Bag's ⚙. A gear on the HUD / town menu would make it easier to find. Music volume and damage-number style (from 2.2) aren't there yet: there's no music, and only one damage-number style. |
 | B14 | Low | Watch | If the server refuses a strike (cooldown, a run started), the forge waits ~4s then re-enables STRIKE; the hammer still swings first. That's fine, but a refusal message comes only as the normal Notify toast. |
 
 ### 5.4 Leftover Deliverables (Checklist)
@@ -297,9 +301,10 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 - [x] Hall of Champions podium
 - [x] Rebirth before → after (with two-tap confirm)
 - [x] Bag paper doll (replaces 2.2 item 2)
-- [ ] Credits screen (fixes B3), probably behind a Settings gear *(next candidate)*
+- [x] Settings & Credits screen (fixes B3)
 - [x] Rift Gate world map
-- [ ] Store cards (the last window still drawn as a list, in `UIController.renderShop`)
+- [x] Store (already game-style, checked)
+- [ ] HUD fixes from 2.2 (popup overlap, combo overlap, "Label" flash) *(next candidate)*
 - [ ] Merge `game-like-ui` → `main` after the user reviews it
 
 **Assets now in hand but not used yet:**

@@ -60,6 +60,9 @@ export type PlayerProfileData = {
 	-- Step SP-6
 	Stats: { [string]: number }, -- lifetime counters (Kills, BossKills, HighestRoom, ...) for quests & leaderboards
 	Quests: { Day: number, Daily: { string }, Progress: { [string]: number }, Claimed: { [string]: boolean } },
+
+	-- Settings screen (client preferences, saved with the profile)
+	Settings: { SfxVolume: number, ScreenShake: boolean },
 }
 
 type LockInfo = { JobId: string, Time: number, Session: string }
@@ -128,6 +131,7 @@ local function newDefaultProfile(): PlayerProfileData
 
 		Stats = {},
 		Quests = { Day = 0, Daily = {}, Progress = {}, Claimed = {} },
+		Settings = { SfxVolume = 1, ScreenShake = true },
 	}
 end
 
@@ -464,6 +468,28 @@ function PlayerDataService.Init()
 	getProfile.OnServerInvoke = function(player: Player)
 		return PlayerDataService.Wait(player)
 	end
+
+	-- SaveSettings { SfxVolume = 0..1 in quarter steps, ScreenShake = boolean }: purely cosmetic, so only shape-checked.
+	local lastSettings: { [Player]: number } = {}
+	Remotes.GetEvent("SaveSettings").OnServerEvent:Connect(function(player: Player, payload: any)
+		local now = os.clock()
+		if type(payload) ~= "table" or now - (lastSettings[player] or 0) < 0.25 or not profiles[player] then
+			return
+		end
+		lastSettings[player] = now
+		local volume = tonumber(payload.SfxVolume)
+		PlayerDataService.Mutate(player, function(data)
+			if volume and volume == volume then
+				data.Settings.SfxVolume = math.clamp(math.round(volume * 4) / 4, 0, 1)
+			end
+			if type(payload.ScreenShake) == "boolean" then
+				data.Settings.ScreenShake = payload.ScreenShake
+			end
+		end)
+	end)
+	Players.PlayerRemoving:Connect(function(player)
+		lastSettings[player] = nil
+	end)
 
 	local ok, result = pcall(function()
 		return DataStoreService:GetDataStore(STORE_NAME)

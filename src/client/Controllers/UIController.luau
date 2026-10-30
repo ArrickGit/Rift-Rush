@@ -1458,6 +1458,7 @@ end
 
 local STATION_RENDERERS: { [string]: () -> () } = {
 	RiftGate = StationPanels.Renderers.RiftGate,
+	Settings = StationPanels.Renderers.Settings,
 	AscensionPedestal = StationPanels.Renderers.AscensionPedestal,
 	SparkSanctum = StationPanels.Renderers.SparkSanctum,
 	RiftShrine = function()
@@ -1524,7 +1525,7 @@ local function scheduleStationRefresh()
 end
 
 local function onOpenStation(payload: any)
-	if type(payload) ~= "table" or type(payload.Station) ~= "string" or (inRun() and payload.Station ~= "Inventory") then
+	if type(payload) ~= "table" or type(payload.Station) ~= "string" or (inRun() and payload.Station ~= "Inventory" and payload.Station ~= "Settings") then
 		return
 	end
 	local key = payload.Station
@@ -1915,6 +1916,7 @@ local function onProfileUpdated(data: any)
 		return
 	end
 	profile = data
+	StationPanels.ApplySettings(data)
 	liveLevel = tonumber(data.HunterLevel) or liveLevel
 	liveXP = tonumber(data.HunterXP) or liveXP
 	refreshProfileHud()
@@ -2053,6 +2055,9 @@ function UIController.Init()
 		paragraph = paragraph, currencyIcon = currencyIcon, formatNumber = formatNumber, toRoman = toRoman,
 		inRun = inRun, newPanel = newPanel, newLayer = newLayer, COLORS = COLORS, DISPLAY_FONT = DISPLAY_FONT,
 		requestPurchase = requestPurchase, startRun = startRun,
+		openStation = function(key: string)
+			onOpenStation({ Station = key })
+		end,
 		isStartingRun = function(): boolean
 			return startingRun
 		end,
