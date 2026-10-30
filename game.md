@@ -217,7 +217,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | 2026-10-29 | `8ac6b82` | `game-like-ui` | **Spark Sanctum → skill tree.** **Quest Board → pinned parchment cards + WANTED posters.** New `Sfx.luau` (all buttons click; windows open / close with sounds). Station window enlarged 660×540 → 700×600. 4 unwired Ascension nodes flagged `ComingSoon` (shown as SOON, refused by the server). |
 | 2026-10-30 | `146f53c` | `game-like-ui` | This live log (Section 5) added; Ascension node IDs in 2.1 corrected against the code. |
 | 2026-10-30 | `a284759` | `game-like-ui` | **Star-Forge → anvil scene** (`StarForgeScene.luau`): relic shelf, 5 star sockets, relic on the anvil, big success % with a pity "heat" bar, 3-blow hammer animation, star-slam / smoke-fizzle results. Shared helpers moved to `SceneKit.luau` (incl. a new `pill` button). **Bug fix:** *Broken Crown*'s description had unescaped `%` signs, so `RelicConfig.Describe("REL_07")` threw, on the server too (new-relic and star-up celebrations). |
-| 2026-10-30 | *(next commit)* | `game-like-ui` | **Blacksmith → weapon rack** (`BlacksmithScene.luau`): 8 weapons on pegs on a wooden wall (never-forged = black silhouette + lock, switched-off = grey + OFF tag, owned = accent glow + Mastery badge, equipped = green ✔), and a detail card with damage / speed / Q-cooldown chips, passive, cost chips and one action (Forge / Reactivate / Equip). Forged weapons flare from white into colour with `Forge_Success`. |
+| 2026-10-30 | `13ca7f0` | `game-like-ui` | **Blacksmith → weapon rack** (`BlacksmithScene.luau`): 8 weapons on pegs on a wooden wall (never-forged = black silhouette + lock, switched-off = grey + OFF tag, owned = accent glow + Mastery badge, equipped = green ✔), and a detail card with damage / speed / Q-cooldown chips, passive, cost chips and one action (Forge / Reactivate / Equip). Forged weapons flare from white into colour with `Forge_Success`. |
+| 2026-10-30 | *(next commit)* | `game-like-ui` | **Legion Hall → mastery shrine** (`LegionScene.luau`): a 6-socket Link gem bar (filled / open "+" / locked), the selected weapon inside a ring of 20 Mastery pips (10 and 20 are numbered gem pips in the weapon's colour; the next pip pulses), XP bar, a Link card with the bonus as a huge "+8%", M10 / M20 tier chips and a "💎 Socket it" / "Remove gem" button, and a strip of the 8 weapons with M-levels and a gem dot when socketed. |
 
 ### 5.2 Game-Like UI Redesign (Branch `game-like-ui`)
 
@@ -237,8 +238,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | **Quest Board** | ✅ | 3 pinned parchment cards (icon disc, big "12 / 60", bar, reward icons, glowing Claim). Claiming flies the rewards and slams a DONE stamp. 2 WANTED bounty posters below. Countdown pill shows when the next dailies arrive. |
 | **Star-Forge** | ✅ | **Anvil scene.** A shelf of 8 relic tiles (undiscovered = dark silhouette + "?", equipped = green bag badge). The selected relic sits on an anvil under **5 star sockets** (the next one pulses orange). Success chance is a huge % with a bar whose orange end is the **pity "heat"** from failed strikes. The detail card has the effect, the next star's bonus, the cost (red when short), **🔨 STRIKE!**, and small Guard (Safeguard) / Start-with toggles. STRIKE swings a hammer 3 times (`Forge_Hammer1–3` + sparks), then a star slams into its socket (`Forge_Success` + bursts) or smoke puffs (`Forge_Fail`) and the heat pours in. Tested on real server data: a 90% fail, then a 100% success. |
 | **Blacksmith** | ✅ | **Weapon rack.** 8 weapons hang on pegs on a wooden wall: owned ones glow in their accent colour with an M-level badge, never-forged ones are black silhouettes with a lock, Rebirth-switched-off ones are grey with an OFF tag, and the equipped one has a green ✔. The detail card underneath shows the big icon, 3 stat chips (damage, attacks/s, Q cooldown), the passive + Q name, the cost (red when short) and one action button. Tested: browsing, locked costs, Equip round-trip (Greatsword ⇄ Staff). |
-| **Legion Hall** | 🔨 next | **Weapon carousel** with a big **Mastery ring** around the weapon icon (XP progress as a radial ring, level in the middle). **6 link-gem sockets** along the bottom: drag / tap a weapon's Link gem into a socket. Locked sockets show the Mastery needed. |
-| **Hall of Champions** | ⬜ | **Podium** with the top 3 as avatar headshots (gold / silver / bronze pedestals), ranks 4–10 as hanging ribbons, 3 board tabs as banners. The player's own rank is pinned at the bottom. |
+| **Legion Hall** | ✅ | **Mastery shrine.** Link gem bar on top (sockets fill with the Link's icon in the weapon's colour; locked sockets show a padlock), the weapon in a ring of 20 Mastery pips with gem pips at 10 / 20, a Link card with the bonus in huge text and M10 / M20 tier chips, and a weapon strip to switch. Newly socketed gems pop in; a weapon that levelled since your last look flares. Tested: renders, weapon switching. *Not yet tested:* socketing (no weapon at M10 on the test profile, see B17). Old design notes: | **Weapon carousel** with a big **Mastery ring** around the weapon icon (XP progress as a radial ring, level in the middle). **6 link-gem sockets** along the bottom: drag / tap a weapon's Link gem into a socket. Locked sockets show the Mastery needed. |
+| **Hall of Champions** | 🔨 next | **Podium** with the top 3 as avatar headshots (gold / silver / bronze pedestals), ranks 4–10 as hanging ribbons, 3 board tabs as banners. The player's own rank is pinned at the bottom. |
 | **Rebirth** | ⬜ | **Before → After split.** Left is "now" (level, multiplier), right is "after" (new multiplier, +Sparks in huge gold), with a big pulsing portal button in the middle. Standard vs Keep-Everything as 2 big choice cards. |
 | **Bag** | ⬜ | **Paper doll.** Character silhouette with Weapon, Starting Relic(s) and Link Skill slots around it; a live stat summary with icons; an inventory grid below with 1-tap equip. |
 | **Rift Gate / Store / HUD** | ⬜ | Later: world-map style gate (World 1 lit, Worlds 2–8 shadowed), store cards with Robux badges, and the HUD fixes from 2.2. |
@@ -269,6 +270,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 | B13 | Low | Open | The Star-Forge's test profile was spent down in testing (Broken Crown 1★ → 2★, 10 Shards and 500 Dust used). Harmless in Studio. |
 | B15 | Low | Unverified | The Blacksmith's "just forged" flare + `Forge_Success` were not run on real data (it would have spent the test profile's only 2 Boss Cores and permanently unlocked the Bow). Same detection pattern as the Sanctum and Star-Forge, which do work. |
 | B16 | Low | Note | Station-panel toasts ("Greatsword equipped") appear on top of the window header. That's B11 in action; it doesn't block anything. |
+| B17 | Low | Unverified | Legion Hall gem socketing / removing and the socket pop were not exercised: no weapon on the test profile is at Mastery 10. The remote (`LoadoutAction EquipLink / UnequipLink`) is unchanged from the old panel. |
+| B18 | Info | Note | Clicking outside the station window closes it (by design). When testing with MCP mouse input, use `AbsolutePosition` coordinates: screenshots include the 58px top-bar inset. |
 | B14 | Low | Watch | If the server refuses a strike (cooldown, a run started), the forge waits ~4s then re-enables STRIKE; the hammer still swings first. That's fine, but a refusal message comes only as the normal Notify toast. |
 
 ### 5.4 Leftover Deliverables (Checklist)
@@ -278,8 +281,8 @@ Once the game launches with World 1 polished end-to-end, post-launch updates wil
 - [x] Quest Board cards + bounty posters
 - [x] Star-Forge anvil scene
 - [x] Blacksmith weapon rack
-- [ ] Legion Hall carousel + link-gem sockets *(next)*
-- [ ] Hall of Champions podium
+- [x] Legion Hall mastery ring + link-gem sockets
+- [ ] Hall of Champions podium *(next)*
 - [ ] Rebirth before → after
 - [ ] Bag paper doll (replaces 2.2 item 2)
 - [ ] Credits screen (fixes B3), probably behind a Settings gear

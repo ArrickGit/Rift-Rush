@@ -1,9 +1,9 @@
 --!strict
 -- StarterPlayerScripts/Client/Controllers/StationPanels.luau
 -- The loadout panels UIController shows in its station window (game.md Steps SP-2 / SP-3 / SP-5 / SP-6):
---   Legion Hall (Mastery & Link Skills), Hall of Champions and the Bag (Inventory, usable anywhere). The Spark
---   Sanctum and Quest Board (StationScenes), the Star-Forge (StarForgeScene) and the Blacksmith (BlacksmithScene)
---   are drawn as scenes and routed through Renderers here.
+--   Hall of Champions and the Bag (Inventory, usable anywhere). The Spark Sanctum and Quest Board (StationScenes),
+--   the Star-Forge (StarForgeScene), the Blacksmith (BlacksmithScene) and the Legion Hall (LegionScene) are drawn
+--   as scenes and routed through Renderers here.
 -- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards).
 --
 -- UIController owns the window and passes its drawing helpers in as a kit (Init); renderers draw into kit.content()
@@ -20,6 +20,7 @@ local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 local BlacksmithScene = require(script.Parent:WaitForChild("BlacksmithScene"))
+local LegionScene = require(script.Parent:WaitForChild("LegionScene"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 local StarForgeScene = require(script.Parent:WaitForChild("StarForgeScene"))
@@ -190,16 +191,6 @@ local function linkRow(order: number, weaponId: string)
 		end }
 	end
 	actionRow(order, title, desc, { button })
-end
-
-local function renderLegionHall()
-	local active = profileTable("ActiveLinkSkills")
-	K.section(1, ("Hunter Legion Link Skills  ·  %d / %d slots"):format(#active, linkSlots()))
-	K.paragraph(2, "Kills award Mastery XP to your equipped weapon. At Mastery 10 its Link Skill unlocks (Tier 2 at 20) and buffs you with ANY weapon. Past 20, Paragon ranks add +0.5% damage & Dust each.",
-		K.COLORS.Muted)
-	for index, weaponId in WeaponConfig.Order do
-		linkRow(2 + index, weaponId)
-	end
 end
 
 local function relicSlots(): number
@@ -436,7 +427,7 @@ end
 
 StationPanels.Renderers = {
 	Blacksmith = BlacksmithScene.Render,
-	LegionHall = renderLegionHall,
+	LegionHall = LegionScene.Render,
 	StarForge = StarForgeScene.Render,
 	QuestBoard = StationScenes.Renderers.QuestBoard,
 	SparkSanctum = StationScenes.Renderers.SparkSanctum,
@@ -459,6 +450,7 @@ function StationPanels.Init(kit: any)
 	StationScenes.Init(kit)
 	StarForgeScene.Init(kit)
 	BlacksmithScene.Init(kit)
+	LegionScene.Init(kit)
 end
 
 return StationPanels
