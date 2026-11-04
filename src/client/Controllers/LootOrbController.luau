@@ -2,7 +2,7 @@
 -- StarterPlayerScripts/Client/Controllers/LootOrbController.luau
 -- Physical loot (game.md 3.5). The server credits the Dust first; this controller only makes it feel physical:
 --   * DustOrbs{Pos,Amount,Count} (CombatFx, sent to the player who earned it): glowing Rift Dust crystals burst out of
---     the kill / chest, bounce for 0.25s, then wait until the player is inside the pickup radius and zoom into their
+--     the kill / chest / Training Sanctuary dummy, bounce for 0.25s, then wait until the player is inside the pickup radius and zoom into their
 --     chest. Base radius 18 studs; the Vacuum Aura Ascension node (AS_T1_03) adds +15 / +35 / whole room. Orbs nobody
 --     walks to fly in on their own after a few seconds. Each pickup plays a tick whose pitch climbs through a combo
 --     and bumps the "+N Rift Dust" ticker under the run banner.
@@ -221,14 +221,9 @@ end
 
 local function stepOrbs(dt: number, now: number)
 	local root = localRoot()
-	local inRun = localPlayer:GetAttribute("RunId") ~= nil
 	local radius = pickupRadius()
 	for index = #orbs, 1, -1 do
 		local orb = orbs[index]
-		if not inRun then
-			removeOrb(index)
-			continue
-		end
 		local age = now - orb.Born
 		if orb.Homing and root then
 			local target = root.Position + Vector3.new(0, 0.5, 0)
@@ -395,6 +390,12 @@ function LootOrbController.Init()
 		elseif payload.Kind == "LootBeam" then
 			spawnBeam(payload.Pos, tostring(payload.Title or "✨ RARE DROP!"), payload.Gold == true,
 				tonumber(payload.Owner) or 0)
+		end
+	end)
+	-- Orbs belong to the place they dropped in: entering or leaving a run sweeps them away.
+	localPlayer:GetAttributeChangedSignal("RunId"):Connect(function()
+		for index = #orbs, 1, -1 do
+			removeOrb(index)
 		end
 	end)
 	Remotes.GetEvent("ProfileUpdated").OnClientEvent:Connect(applyProfile)

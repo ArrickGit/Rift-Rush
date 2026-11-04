@@ -8,6 +8,9 @@
 --   { Cmd = "GiveUpgrade", Id = "Gigantism" }      adds one stack of a run card (must be inside a run)
 --   { Cmd = "StartRun", World = 1, Corruption = 0 } solo run, as if through the Rift Gate
 --   { Cmd = "Reforge", Weapon = "Bow", Tier = "Mythic" } sets a weapon's reforge tier directly (Tier = nil clears it)
+--   { Cmd = "SetProfile", Level = 1, Stats = { RoomsCleared = 0 } } returns the previous values as JSON
+--   { Cmd = "Ascension", Id = "AS_T1_03", Level = 3 } sets a node level, returns the previous one
+--   { Cmd = "Offline", Minutes = 200 }             pretend the player was away; shows the offline training card
 -- The first player in the server is the target unless Player = <name> is given.
 
 local Players = game:GetService("Players")
@@ -18,6 +21,7 @@ local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
 local RelicService = require(script.Parent:WaitForChild("RelicService"))
 local RunManagerService = require(script.Parent:WaitForChild("RunManagerService"))
+local SanctuaryService = require(script.Parent:WaitForChild("SanctuaryService"))
 local WeaponHoldService = require(script.Parent:WaitForChild("WeaponHoldService"))
 
 local DevCommandsService = {}
@@ -99,6 +103,8 @@ local function run(request: any): string
 			data.AscensionNodes[request.Id] = (if level > 0 then level else nil) :: any
 		end)
 		return tostring(previous)
+	elseif cmd == "Offline" then -- Minutes = 0 clears the pending card
+		return tostring(SanctuaryService.DevAway(player, tonumber(request.Minutes) or 60))
 	elseif cmd == "StartRun" then
 		local ok, message = RunManagerService.StartRun({ player }, tonumber(request.World) or 1, tonumber(request.Corruption) or 0)
 		if not ok then

@@ -31,6 +31,8 @@ local EVENTS = {
 	"MasteryUpdated", -- S->C: { Weapon, Level, XP, Paragon, Required, LevelUp?, LinkTier? } after Mastery XP is awarded
 	"Celebrate", -- S->C: { Kind = "Relic" | "Mastery" | "Quest", Title, Body, Icon, Color } big centre-screen banner
 	"SaveSettings", -- C->S: { SfxVolume, ScreenShake } from the Settings screen (PlayerDataService)
+	"OfflineTraining", -- S->C: { Kind = "Show", Minutes, Dust, Mastery, Weapon, Icon } | { Kind = "Closed" } (SanctuaryService)
+	"ClaimOfflineTraining", -- C->S: { Action = "Query" | "Claim" } — the 2x claim is the OfflineDouble Robux product
 }
 
 local FUNCTIONS = {

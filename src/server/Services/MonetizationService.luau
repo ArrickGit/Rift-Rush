@@ -29,6 +29,7 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
 local RebirthService = require(script.Parent:WaitForChild("RebirthService"))
 local RunManagerService = require(script.Parent:WaitForChild("RunManagerService"))
+local SanctuaryService = require(script.Parent:WaitForChild("SanctuaryService"))
 
 type PlayerProfileData = PlayerDataService.PlayerProfileData
 type ProductInfo = MonetizationConfig.ProductInfo
@@ -156,6 +157,19 @@ local GRANTS: { [string]: GrantFn } = {
 		MonetizationService.StartRiftSurge(player)
 		return true
 	end,
+	-- Claims the waiting offline training twice over; if it was already claimed, an Anchor Token instead.
+	OfflineDouble = function(player: Player): boolean
+		if not PlayerDataService.Get(player) then
+			return false
+		end
+		if not SanctuaryService.ClaimOffline(player, 2) then
+			PlayerDataService.Mutate(player, function(profile)
+				profile.AnchorTokens += 1
+			end)
+			notify(player, "Your offline training was already claimed, so you received an Anchor Token instead.")
+		end
+		return true
+	end,
 }
 for key, product in MonetizationConfig.Products do
 	if MonetizationConfig.DefeatProducts[key] then
@@ -275,6 +289,9 @@ function MonetizationService.PromptProduct(player: Player, key: string): (boolea
 	end
 	if product.Id == 0 then
 		return false, product.Name .. " is not on sale yet"
+	end
+	if product.Key == "OfflineDouble" and not SanctuaryService.HasOffline(player) then
+		return false, "No offline training to claim"
 	end
 	if MonetizationConfig.DefeatProducts[product.Key] then
 		if not RunManagerService.IsDefeated(player) then

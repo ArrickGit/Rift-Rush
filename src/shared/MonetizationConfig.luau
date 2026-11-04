@@ -37,6 +37,7 @@ MonetizationConfig.Products = {
 	RiftSurge = { Key = "RiftSurge", Name = "Server Rift Surge", Price = 99, Id = 0 },
 	RerollPack5 = { Key = "RerollPack5", Name = "Upgrade Reroll Pack (5x)", Price = 25, Id = 0 },
 	StarForceSafeguardPack = { Key = "StarForceSafeguardPack", Name = "Star-Force Safeguard Pack", Price = 49, Id = 0 },
+	OfflineDouble = { Key = "OfflineDouble", Name = "2x Offline Training", Price = 25, Id = 0 }, -- game.md 3.7
 } :: { [string]: ProductInfo }
 
 -- Permanent Gamepasses (Section 27.2)

@@ -41,7 +41,15 @@ end
 -- Awards Mastery XP for one kill to the player's equipped weapon. killKind: Normal | Elite | MiniBoss | WorldBoss.
 function MasteryService.AwardKill(player: Player, killKind: string, worldIndex: number, corruption: number)
 	local profile = PlayerDataService.Get(player)
-	if not profile then
+	if profile then
+		MasteryService.AwardXP(player, computeXP(profile, killKind, worldIndex, corruption))
+	end
+end
+
+-- Adds a flat amount of Mastery XP to the equipped weapon (Training Sanctuary, offline training), with level-ups.
+function MasteryService.AwardXP(player: Player, gained: number)
+	local profile = PlayerDataService.Get(player)
+	if not profile or gained <= 0 then
 		return
 	end
 	local weaponId = profile.EquippedWeapon
@@ -54,7 +62,6 @@ function MasteryService.AwardKill(player: Player, killKind: string, worldIndex: 
 		entry = { Level = 1, XP = 0, ParagonRank = 0 }
 		profile.WeaponMastery[weaponId] = entry
 	end
-	local gained = computeXP(profile, killKind, worldIndex, corruption)
 	entry.XP += gained
 
 	local leveled = false

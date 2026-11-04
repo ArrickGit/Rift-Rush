@@ -66,6 +66,11 @@ export type PlayerProfileData = {
 
 	-- Settings screen (client preferences, saved with the profile)
 	Settings: { SfxVolume: number, ScreenShake: boolean, AutoAttack: boolean },
+
+	-- "While You Were Away" (game.md 3.7, SanctuaryService): stamped on every save; unclaimed offline training waits
+	-- here (Minutes = 0 means nothing pending) so leaving before claiming never loses it.
+	LastSeenAt: number, -- os.time() of the last save, 0 = never saved
+	OfflineTraining: { Minutes: number, Dust: number, Mastery: number },
 }
 
 type LockInfo = { JobId: string, Time: number, Session: string }
@@ -139,6 +144,8 @@ local function newDefaultProfile(): PlayerProfileData
 		Stats = {},
 		Quests = { Day = 0, Daily = {}, Progress = {}, Claimed = {} },
 		Settings = { SfxVolume = 1, ScreenShake = true, AutoAttack = false },
+		LastSeenAt = 0,
+		OfflineTraining = { Minutes = 0, Dust = 0, Mastery = 0 },
 	}
 end
 
@@ -358,6 +365,7 @@ local function writeProfile(player: Player, release: boolean): boolean
 	if not data or ephemeral[player] or not store then
 		return false
 	end
+	data.LastSeenAt = os.time() -- offline training counts from the last save (autosave keeps it within 90s)
 	local snapshot = encode(data)
 	local lostLock = false
 	local ok = withRetries("Save " .. keyFor(player), function()
