@@ -455,6 +455,22 @@ function Movement25DController.GetFacing(): number
 	return facing
 end
 
+-- Turns the character to face `direction` (+1 / -1) along the lane (Auto-Attack facing its target). Mid-dash the
+-- dash keeps its direction.
+function Movement25DController.SetFacing(direction: number)
+	local dir = if direction < 0 then -1 else 1
+	if dir == facing or dashTimeLeft > 0 then
+		return
+	end
+	facing = dir
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		local position = root.Position
+		root.CFrame = CFrame.lookAt(position, position + Vector3.new(dir, 0, 0))
+	end
+end
+
 function Movement25DController.IsDashing(): boolean
 	return dashTimeLeft > 0
 end

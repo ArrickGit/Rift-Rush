@@ -74,6 +74,23 @@ local function run(request: any): string
 			data.WeaponReforge[request.Weapon] = entry
 		end)
 		WeaponHoldService.Refresh(player)
+	elseif cmd == "SetProfile" then
+		-- { Level = n?, Stats = { RoomsCleared = n, ... }? } — returns the previous values so a test can restore them.
+		local before: { [string]: any } = { Level = profile.HunterLevel, Stats = {} }
+		PlayerDataService.Mutate(player, function(data)
+			if tonumber(request.Level) then
+				data.HunterLevel = math.max(1, math.floor(tonumber(request.Level) :: number))
+			end
+			if type(request.Stats) == "table" then
+				for key, value in request.Stats do
+					if type(key) == "string" and tonumber(value) then
+						before.Stats[key] = data.Stats[key] or 0
+						data.Stats[key] = tonumber(value) :: number
+					end
+				end
+			end
+		end)
+		return game:GetService("HttpService"):JSONEncode(before)
 	elseif cmd == "StartRun" then
 		local ok, message = RunManagerService.StartRun({ player }, tonumber(request.World) or 1, tonumber(request.Corruption) or 0)
 		if not ok then

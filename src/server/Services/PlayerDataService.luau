@@ -65,7 +65,7 @@ export type PlayerProfileData = {
 	Quests: { Day: number, Daily: { string }, Progress: { [string]: number }, Claimed: { [string]: boolean } },
 
 	-- Settings screen (client preferences, saved with the profile)
-	Settings: { SfxVolume: number, ScreenShake: boolean },
+	Settings: { SfxVolume: number, ScreenShake: boolean, AutoAttack: boolean },
 }
 
 type LockInfo = { JobId: string, Time: number, Session: string }
@@ -138,7 +138,7 @@ local function newDefaultProfile(): PlayerProfileData
 
 		Stats = {},
 		Quests = { Day = 0, Daily = {}, Progress = {}, Claimed = {} },
-		Settings = { SfxVolume = 1, ScreenShake = true },
+		Settings = { SfxVolume = 1, ScreenShake = true, AutoAttack = false },
 	}
 end
 
@@ -477,7 +477,8 @@ function PlayerDataService.Init()
 		return PlayerDataService.Wait(player)
 	end
 
-	-- SaveSettings { SfxVolume = 0..1 in quarter steps, ScreenShake = boolean }: purely cosmetic, so only shape-checked.
+	-- SaveSettings { SfxVolume = 0..1 in quarter steps, ScreenShake = boolean, AutoAttack = boolean }: client-side
+	-- preferences (Auto-Attack only paces the client's own attack requests), so only shape-checked. Missing keys stay.
 	local lastSettings: { [Player]: number } = {}
 	Remotes.GetEvent("SaveSettings").OnServerEvent:Connect(function(player: Player, payload: any)
 		local now = os.clock()
@@ -492,6 +493,9 @@ function PlayerDataService.Init()
 			end
 			if type(payload.ScreenShake) == "boolean" then
 				data.Settings.ScreenShake = payload.ScreenShake
+			end
+			if type(payload.AutoAttack) == "boolean" then
+				data.Settings.AutoAttack = payload.AutoAttack
 			end
 		end)
 	end)

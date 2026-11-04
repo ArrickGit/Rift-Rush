@@ -19,6 +19,7 @@ local InventoryService = require(Services:WaitForChild("InventoryService"))
 local LeaderboardService = require(Services:WaitForChild("LeaderboardService"))
 local FlexBadgeService = require(Services:WaitForChild("FlexBadgeService"))
 local TownHubService = require(Services:WaitForChild("TownHubService"))
+local OnboardingService = require(Services:WaitForChild("OnboardingService"))
 local DevCommandsService = require(Services:WaitForChild("DevCommandsService"))
 
 PlayerDataService.Init()
@@ -37,6 +38,7 @@ InventoryService.Init() -- Blacksmith / loadout actions
 LeaderboardService.Init()
 FlexBadgeService.Init() -- overhead Rebirth / title / best-room badge in Haven Outpost
 TownHubService.Init() -- builds Haven Outpost and its TownSpawn
+OnboardingService.Init() -- after the town: starter weapon rack, new-hunter spawn, TownTier / NewHunter attributes
 DevCommandsService.Init() -- Studio only: ServerStorage.RiftDev test hooks
 
 print("[RiftRush] Server started")

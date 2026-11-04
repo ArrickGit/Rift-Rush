@@ -129,6 +129,18 @@ local function equipWeapon(player: Player, profile: PlayerProfileData, weaponId:
 	return nil
 end
 
+-- Equip from outside the Bag (the starter weapon rack, OnboardingService). Town only; reports errors as a toast.
+function InventoryService.EquipWeapon(player: Player, weaponId: string)
+	local profile = PlayerDataService.Get(player)
+	if not profile or RunManagerService.GetRunOf(player) then
+		return
+	end
+	local err = equipWeapon(player, profile, weaponId)
+	if err then
+		notify(player, err)
+	end
+end
+
 local function equipLink(player: Player, profile: PlayerProfileData, linkId: string): string?
 	local weapon = WeaponConfig.GetWeaponForLink(linkId)
 	if not weapon then

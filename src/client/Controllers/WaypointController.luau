@@ -8,11 +8,18 @@
 --     and distance, spread apart so markers never overlap.
 -- Waypoints whose WaypointActive attribute is false (a locked exit) and anything farther than MAX_DISTANCE (the
 -- town while you are in a run, and vice versa) are skipped.
+-- Decluttering (game.md 3.3): in town only the Rift Gate and the nearest other station unlocked for the player's
+-- TownTier (OnboardingConfig) point at all; other stations only show their hover when you walk up, and locked ones
+-- show a grey 🔒 unlock hint instead (OnboardingService also toasts it the first time you walk up). In runs, chests and altars only show within RUN_NEAR studs; the exit always shows.
+-- New hunters (NewHunter attribute) also get a golden "ENTER THE RIFT ➜" guide beside the gate.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+
+local OnboardingConfig = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("OnboardingConfig"))
 
 type Marker = {
 	Target: Instance,
@@ -24,6 +31,7 @@ type Marker = {
 	Hover: BillboardGui,
 	HoverName: TextLabel,
 	Chevron: TextLabel,
+	Color: Color3,
 	Phase: number,
 }
 
@@ -49,10 +57,14 @@ local BOB_HEIGHT = 1.1
 -- Hero landmarks are taller than the side-on camera's frame; the hover never rises above this fraction of the
 -- half-height above the view centre (it stays clear of the top HUD banner and keeps pointing down at the station).
 local HOVER_VIEW_LIMIT = 0.6
+local RUN_NEAR = 45 -- chests / altars inside a run only point when this close
+local EXIT_NAME = "Exit Portal" -- RoomBuilderService's exit waypoint, always shown once open
+local LOCKED_COLOR = Color3.fromRGB(150, 156, 172)
 
 local player = Players.LocalPlayer
 local gui: ScreenGui
 local markers: { [Instance]: Marker } = {}
+local guide: BillboardGui? = nil
 
 local function attribute<T>(instance: Instance, name: string, default: T): T
 	local value = instance:GetAttribute(name)
@@ -170,8 +182,57 @@ local function createMarker(target: Instance)
 
 	markers[target] = {
 		Target = target, Adornee = adornee, TopOffset = apexOffset(target, adornee), Edge = edge, Pivot = pivot,
-		EdgeDistance = edgeDistance, Hover = hover, HoverName = hoverName, Chevron = chevron, Phase = math.random() * 6,
+		EdgeDistance = edgeDistance, Hover = hover, HoverName = hoverName, Chevron = chevron, Color = color,
+		Phase = math.random() * 6,
 	}
+end
+
+-- The tier a Town Hub station needs (nil for anything that isn't a station).
+local function stationTier(target: Instance): number?
+	if target:IsA("Model") and target.Parent and target.Parent.Name == "Stations" then
+		return OnboardingConfig.StationTier[target.Name]
+	end
+	return nil
+end
+
+-- New hunters: a pulsing "ENTER THE RIFT ➜" sign standing on the lane just left of the Rift Gate.
+local function updateGuide(gate: Marker?, now: number)
+	local show = gate ~= nil and player:GetAttribute("NewHunter") == true and player:GetAttribute("RunId") == nil
+	if not show then
+		if guide then
+			guide.Enabled = false
+		end
+		return
+	end
+	local marker = gate :: Marker
+	local sign = guide
+	if not sign or sign.Adornee ~= marker.Adornee then
+		if sign then
+			sign:Destroy()
+		end
+		local created = Instance.new("BillboardGui")
+		created.Name = "RiftGuide"
+		created.Adornee = marker.Adornee
+		created.Size = UDim2.fromOffset(220, 56)
+		created.LightInfluence = 0
+		created.MaxDistance = MAX_DISTANCE
+		label(created, { Name = "Title", Size = UDim2.new(1, 0, 0, 28), Text = "ENTER THE RIFT", TextSize = 26,
+			TextColor3 = Color3.fromRGB(255, 215, 70), TextStrokeTransparency = 0 })
+		label(created, { Name = "Arrows", Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 30), Text = "▶ ▶ ▶",
+			TextSize = 26, TextColor3 = Color3.fromRGB(255, 215, 70), TextStrokeTransparency = 0 })
+		created.Parent = gui
+		guide = created
+		sign = created
+	end
+	local active = sign :: BillboardGui
+	active.Enabled = true
+	-- Gate centre is ~6 studs up; the sign sits low on the lane, just left of the portal, sliding into it.
+	local slide = (now * 1.6) % 1
+	active.StudsOffsetWorldSpace = Vector3.new(-8.5 + slide * 1.5, -4.6, marker.Adornee.Position.Z * -1)
+	local arrows = active:FindFirstChild("Arrows")
+	if arrows and arrows:IsA("TextLabel") then
+		arrows.TextTransparency = 0.5 - 0.5 * math.sin(slide * math.pi)
+	end
 end
 
 local function removeMarker(target: Instance)
@@ -210,6 +271,24 @@ local function update()
 	local boxCenter = Vector2.new((minX + maxX) / 2, (minY + maxY) / 2)
 	local edges: { [string]: { Placed } } = { Left = {}, Right = {}, Top = {}, Bottom = {} }
 
+	-- Town declutter: the Rift Gate plus the nearest other unlocked station are the only ones that point.
+	local townTier = tonumber(player:GetAttribute("TownTier")) or OnboardingConfig.MAX_TIER
+	local gateMarker: Marker? = nil
+	local nearestStation: Instance? = nil
+	local nearestDistance = math.huge
+	for target, marker in markers do
+		local tier = stationTier(target)
+		if target.Name == "RiftGate" and tier then
+			gateMarker = marker
+		elseif tier and tier <= townTier and marker.Adornee.Parent then
+			local distance = (marker.Adornee.Position - root.Position).Magnitude
+			if distance < nearestDistance then
+				nearestStation, nearestDistance = target, distance
+			end
+		end
+	end
+	updateGuide(gateMarker, now)
+
 	for target, marker in markers do
 		if target.Parent == nil or marker.Adornee.Parent == nil then
 			removeMarker(target)
@@ -228,6 +307,19 @@ local function update()
 		local onScreen = inFront and screen.X >= minX and screen.X <= maxX and screen.Y >= minY and screen.Y <= maxY
 		local near = distance <= NEAR_DISTANCE
 
+		local tier = stationTier(target)
+		local locked = tier ~= nil and tier > townTier
+		local name: string = attribute(target, "WaypointName", target.Name)
+		-- Quiet markers never point from afar; they only show their hover when the player is right there.
+		local quiet = if inRun
+			then name ~= EXIT_NAME and distance > RUN_NEAR
+			else tier ~= nil and (locked or (target.Name ~= "RiftGate" and target ~= nearestStation))
+		if quiet and not near then
+			hide(marker)
+			continue
+		end
+		marker.Chevron.TextColor3 = if locked then LOCKED_COLOR else marker.Color
+
 		if near or onScreen then
 			marker.Edge.Visible = false
 			marker.Hover.Enabled = true
@@ -236,9 +328,11 @@ local function update()
 			local viewTop = camera.CFrame.Position.Y + math.tan(math.rad(camera.FieldOfView / 2)) * depth * HOVER_VIEW_LIMIT
 			local height = math.min(marker.TopOffset + lift, viewTop - marker.Adornee.Position.Y + math.sin(now * BOB_SPEED + marker.Phase) * BOB_HEIGHT)
 			marker.Hover.StudsOffsetWorldSpace = Vector3.new(0, height, 0)
-			local name: string = attribute(target, "WaypointName", target.Name)
 			local icon: string = attribute(target, "WaypointIcon", "❗")
-			marker.HoverName.Text = if near then ("%s %s"):format(icon, name) else ("%s %s  <font color='#cfdaf0'>%dm</font>"):format(icon, name, math.round(distance))
+			marker.HoverName.Text = if locked
+				then ("%s  <font size='14' color='#cfdaf0'>%s</font>"):format(name, OnboardingConfig.Hint[tier :: number] or "🔒")
+				elseif near then ("%s %s"):format(icon, name)
+				else ("%s %s  <font color='#cfdaf0'>%dm</font>"):format(icon, name, math.round(distance))
 			marker.HoverName.RichText = true
 			local pulse = if near then 1 + 0.08 * math.sin(now * 6) else 0.8
 			marker.Chevron.TextSize = 52 * pulse

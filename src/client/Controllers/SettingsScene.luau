@@ -13,6 +13,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local Camera25DController = require(script.Parent:WaitForChild("Camera25DController"))
+local CombatInputController = require(script.Parent:WaitForChild("CombatInputController"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
@@ -54,6 +55,14 @@ local function save(change: Payload)
 	Sfx.SetVolumeScale(volume)
 	Camera25DController.SetShakeEnabled(shake)
 	saveRemote:FireServer({ SfxVolume = volume, ScreenShake = shake })
+	K.renderStation()
+end
+
+-- Auto-Attack is owned by CombatInputController (its HUD pill toggles it too), so it saves on its own.
+local function saveAutoAttack(enabled: boolean)
+	CombatInputController.SetAutoAttack(enabled)
+	saveRemote:FireServer({ AutoAttack = enabled })
+	Sfx.Play("UI_Toggle", 0.6)
 	K.renderStation()
 end
 
@@ -107,7 +116,16 @@ local function renderSettings()
 			Sfx.Play("UI_Toggle", 0.6)
 		end },
 	})
-	credits(3)
+	local auto = CombatInputController.IsAutoAttack()
+	row(3, "Weapon_Greatsword", "Auto-Attack", {
+		{ Label = "On", Selected = auto, OnClick = function()
+			saveAutoAttack(true)
+		end },
+		{ Label = "Off", Selected = not auto, OnClick = function()
+			saveAutoAttack(false)
+		end },
+	})
+	credits(4)
 end
 
 SettingsScene.Render = renderSettings

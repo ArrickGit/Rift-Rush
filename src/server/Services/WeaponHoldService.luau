@@ -356,6 +356,32 @@ local function attach(character: Model, hand: BasePart, info: WeaponInfo, parago
 	model.Parent = character
 end
 
+-- A loose, anchored, non-colliding copy of a weapon (longest side `length` studs, centred on the origin) for
+-- displays like the starter weapon rack (OnboardingService).
+function WeaponHoldService.CreateDisplayModel(weaponId: string, length: number): Model?
+	local info = WeaponConfig.Weapons[weaponId]
+	if not info then
+		return nil
+	end
+	local model = getPrefab(info)
+	local _, rawSize = model:GetBoundingBox()
+	local longest = math.max(rawSize.X, rawSize.Y, rawSize.Z)
+	if longest > 0.01 then
+		model:ScaleTo(model:GetScale() * (length / longest))
+	end
+	local center = model:GetBoundingBox()
+	model:PivotTo(model:GetPivot() - center.Position)
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanQuery = false
+			descendant.CanTouch = false
+		end
+	end
+	return model
+end
+
 -- (Re)welds the player's equipped weapon if it changed. Safe to call often.
 function WeaponHoldService.Refresh(player: Player)
 	local character = player.Character
