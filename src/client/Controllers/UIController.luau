@@ -1062,6 +1062,25 @@ do
 		Corrupted = "magenta",
 	}
 	local SHARD_CARD_GAP = 18
+	local offerPicks, offerHeadstart = 0, false -- Double Orb picks left (0 = a normal orb), Headstart Blessing orb
+
+	-- 🔥 SYNERGY! ribbon on the card's top-right corner when it shares a build tag (game.md 3.6).
+	local function synergyRibbon(parent: GuiObject, tag: any)
+		if type(tag) ~= "string" then
+			return
+		end
+		local ribbon: Frame = create("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 6, 0, -14),
+			Size = UDim2.fromOffset(118, 40), Rotation = 12, BackgroundColor3 = Color3.fromRGB(255, 120, 40),
+			ZIndex = 20 }, parent)
+		round(ribbon, 10)
+		create("UIStroke", { Color = Color3.fromRGB(255, 230, 120), Thickness = 3 }, ribbon)
+		create("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(255, 200, 60), Color3.fromRGB(255, 70, 40)),
+			Rotation = 90 }, ribbon)
+		newLabel(ribbon, { Size = UDim2.new(1, 0, 0, 24), Text = "🔥 SYNERGY!", Font = DISPLAY_FONT, TextSize = 18,
+			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 0, ZIndex = 21 })
+		newLabel(ribbon, { Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 14), Text = tag:upper(),
+			TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 0.2, ZIndex = 21 })
+	end
 
 	local function buildShardUpgradeCard(index: number, card: any)
 		local size: Vector2 = Shard.Card.size("sm")
@@ -1079,6 +1098,7 @@ do
 		newLabel(gem.Thumb, { Size = UDim2.fromScale(1, 1), Text = tostring(card.Icon), TextSize = 62, ZIndex = 8,
 			TextXAlignment = Enum.TextXAlignment.Center, TextStrokeTransparency = 1 })
 		gem.Root.Parent = slot
+		synergyRibbon(gem.Root, card.Synergy)
 
 		local stacks = tonumber(card.Stacks) or 0
 		local maxStacks = tonumber(card.MaxStacks) or 1
@@ -1096,6 +1116,9 @@ do
 		local count = #offerCards
 		upgradeTitle.Text = if banishMode
 			then ("<font color='#%s'>🚫 Choose a card to BANISH for this run</font>"):format(COLORS.Bad:ToHex())
+			elseif offerPicks > 0 then ("<font color='#%s'>✨ <b>DOUBLE ORB!</b> %s</font>"):format(COLORS.Gold:ToHex(),
+				if offerPicks > 1 then "Pick 2 upgrades" else "Pick 1 more!")
+			elseif offerHeadstart then "🎁 <b>Headstart Blessing</b> — a free upgrade"
 			else "⬆️ <b>Choose an Upgrade</b>"
 		if Shard then
 			local cardWidth = Shard.Card.size("sm").X
@@ -1149,6 +1172,7 @@ do
 				TextColor3 = COLORS.Text, TextSize = 15, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
 				TextStrokeTransparency = 0.3, LayoutOrder = 5 })
 
+			synergyRibbon(button, card.Synergy)
 			button.Activated:Connect(function()
 				chooseCard(index)
 			end)
@@ -1174,6 +1198,8 @@ do
 			offerCards = payload.Cards
 			offerRerolls = tonumber(payload.Rerolls) or 0
 			offerBanishes = tonumber(payload.Banishes) or 0
+			offerPicks = if payload.Double == true then tonumber(payload.Picks) or 1 else 0 -- 0 = a normal orb
+			offerHeadstart = payload.Headstart == true
 			if offerBanishes <= 0 then
 				banishMode = false
 			end

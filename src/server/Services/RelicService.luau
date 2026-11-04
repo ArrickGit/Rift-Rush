@@ -87,6 +87,10 @@ local function onDrop(player: Player, run: Run, source: string)
 	local relicId = RelicConfig.Order[rng:NextInteger(1, #RelicConfig.Order)]
 	local info = RelicConfig.Relics[relicId]
 	local owned = profile.RelicStars[relicId]
+	-- Light pillar where it dropped: gold for a Room 10 relic, purple otherwise.
+	RunManagerService.ShowLootBeam(run, player, if owned
+		then ("✨ RELIC: %s (+%d Shards)"):format(info.Name:upper(), RelicConfig.DUPLICATE_SHARDS)
+		else ("✨ RELIC DISCOVERED: %s!"):format(info.Name:upper()), run.Depth % 10 == 0)
 	if owned then
 		RunManagerService.AddUnsecured(player, { Dust = 0, BossCores = 0, RelicShards = RelicConfig.DUPLICATE_SHARDS })
 		notifyRemote:FireClient(player, ("%s Duplicate %s converted into +%d Relic Shards!"):format(info.Icon, info.Name,

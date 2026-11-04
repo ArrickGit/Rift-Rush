@@ -13,6 +13,7 @@ local WaypointController = require(Controllers:WaitForChild("WaypointController"
 local AmbientController = require(Controllers:WaitForChild("AmbientController"))
 local MobileControlsController = require(Controllers:WaitForChild("MobileControlsController"))
 local RiftPowerController = require(Controllers:WaitForChild("RiftPowerController"))
+local LootOrbController = require(Controllers:WaitForChild("LootOrbController"))
 
 -- Each Init runs in its own thread (in this order, up to its first yield), so one controller that yields or
 -- errors can never stop the rest — e.g. the UI and its Town Hub panels — from starting.
@@ -27,6 +28,7 @@ local inits: { { Name: string, Init: () -> () } } = {
 	{ Name = "AmbientController", Init = AmbientController.Init },
 	{ Name = "MobileControlsController", Init = MobileControlsController.Init },
 	{ Name = "RiftPowerController", Init = RiftPowerController.Init }, -- waits for UIController's RiftHUD
+	{ Name = "LootOrbController", Init = LootOrbController.Init },
 }
 for _, entry in inits do
 	task.spawn(function()

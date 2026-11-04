@@ -83,6 +83,7 @@ export type WeaponInfo = {
 	Name: string,
 	Icon: string,
 	Archetype: string,
+	Tags: { string }, -- build tags shared with UpgradePoolConfig cards (🔥 SYNERGY badges, game.md 3.6)
 	BaseDamage: number, -- W_Base
 	AttacksPerSecond: number,
 	PassiveName: string,
@@ -118,6 +119,7 @@ WeaponConfig.Order = { "Greatsword", "Daggers", "Staff", "Bow", "Hammer", "Gaunt
 WeaponConfig.Weapons = {
 	Greatsword = {
 		Id = "Greatsword", Name = "Greatsword", Icon = "🗡️", Archetype = "Wide-arc melee cleaver",
+		Tags = { "AoE" },
 		BaseDamage = 42, AttacksPerSecond = 1.1,
 		PassiveName = "Berserker's Momentum",
 		PassiveDesc = "Hitting 3+ enemies grants +15% Attack Speed for 3s.",
@@ -133,6 +135,7 @@ WeaponConfig.Weapons = {
 	},
 	Daggers = {
 		Id = "Daggers", Name = "Daggers", Icon = "🔪", Archetype = "Hyper-mobile assassin",
+		Tags = { "Crit", "Speed" },
 		BaseDamage = 18, AttacksPerSecond = 2.6,
 		PassiveName = "Shadow Step",
 		PassiveDesc = "Dashing through an enemy guarantees your next attack is a Critical Hit.",
@@ -148,6 +151,7 @@ WeaponConfig.Weapons = {
 	},
 	Staff = {
 		Id = "Staff", Name = "Staff", Icon = "🪄", Archetype = "Elemental mage",
+		Tags = { "Burn", "Projectile" },
 		BaseDamage = 32, AttacksPerSecond = 1.4,
 		PassiveName = "Elemental Resonance",
 		PassiveDesc = "Inflicting 2 different status effects triggers an Arcane Nova (150% AoE).",
@@ -163,6 +167,7 @@ WeaponConfig.Weapons = {
 	},
 	Bow = {
 		Id = "Bow", Name = "Bow", Icon = "🏹", Archetype = "Long-range sniper & volley",
+		Tags = { "Projectile", "Crit" },
 		BaseDamage = 20, AttacksPerSecond = 2.2,
 		PassiveName = "Hurricane Focus",
 		PassiveDesc = "Consecutive hits on the same target add +3% damage per arrow (up to +30%).",
@@ -179,6 +184,7 @@ WeaponConfig.Weapons = {
 	},
 	Hammer = {
 		Id = "Hammer", Name = "Hammer", Icon = "🔨", Archetype = "Heavy crowd-control",
+		Tags = { "AoE", "Shock" },
 		BaseDamage = 50, AttacksPerSecond = 0.9,
 		PassiveName = "Seismic Impact",
 		PassiveDesc = "Ground slams deal +40% damage to staggered enemies and grant a 5% Max HP shield for 4s.",
@@ -196,6 +202,7 @@ WeaponConfig.Weapons = {
 	},
 	Gauntlets = {
 		Id = "Gauntlets", Name = "Gauntlets", Icon = "🥊", Archetype = "Rapid combo brawler",
+		Tags = { "Speed", "Burn" },
 		BaseDamage = 16, AttacksPerSecond = 3.0,
 		PassiveName = "Combo Overdrive",
 		PassiveDesc = "Your combo never decays while dashing and grants +1% damage per 10 combo (up to +30%).",
@@ -213,6 +220,7 @@ WeaponConfig.Weapons = {
 	},
 	SummoningBell = {
 		Id = "SummoningBell", Name = "Summoning Bell", Icon = "🔔", Archetype = "Spirit commander",
+		Tags = { "Summon" },
 		BaseDamage = 26, AttacksPerSecond = 1.6,
 		PassiveName = "Soul Pack",
 		PassiveDesc = "Summons inherit 100% of your Crit Rate, Attack Speed and status procs.",
@@ -229,6 +237,7 @@ WeaponConfig.Weapons = {
 	},
 	TrickCards = {
 		Id = "TrickCards", Name = "Trick Cards", Icon = "🃏", Archetype = "High-roller gambler",
+		Tags = { "Projectile", "Crit" },
 		BaseDamage = 26, AttacksPerSecond = 1.8,
 		PassiveName = "Loaded Deck",
 		PassiveDesc = "Every 6th attack draws a card: Red = 150% Burn blast, Blue = -2s Q cooldown, Gold = +15 Rift Dust.",

@@ -40,10 +40,10 @@ AscensionShopConfig.Nodes = {
 	AS_T1_03 = { Id = "AS_T1_03", Name = "Vacuum Aura (Auto-Magnet)", Tier = 1, MaxLevel = 3,
 		Costs = { 1, 2, 3 },
 		Desc = "Lv1 +15 stud pickup radius, Lv2 +35, Lv3 full-room instant loot magnet (+10% Gold Find).",
-		EffectPerLevel = "Larger loot magnet", ComingSoon = true },
+		EffectPerLevel = "Larger loot magnet" },
 	AS_T1_04 = { Id = "AS_T1_04", Name = "Headstart Blessing", Tier = 1, MaxLevel = 3,
 		Costs = { 2, 3, 4 },
-		Desc = "Free Upgrade Orb in Room 1: Common+, then Rare+, then Epic+.", EffectPerLevel = "Better Room 1 orb", ComingSoon = true },
+		Desc = "Free Upgrade Orb in Room 1: Common+, then Rare+, then Epic+.", EffectPerLevel = "Better Room 1 orb" },
 	AS_T1_05 = { Id = "AS_T1_05", Name = "Dimensional Pocket", Tier = 1, MaxLevel = 4,
 		Costs = { 1, 2, 2, 3 },
 		Desc = "Routes earned Rift Dust into your Rebirth-safe vault after each run.", EffectPerLevel = "+15% Dust protected" },
@@ -66,7 +66,7 @@ AscensionShopConfig.Nodes = {
 	-- Tier 3: Sovereign of the Rift
 	AS_T3_01 = { Id = "AS_T3_01", Name = "Elemental Crit Overload", Tier = 3, MaxLevel = 3,
 		Costs = { 3, 4, 5 },
-		Desc = "Status effects can Critically Hit for 33% / 66% / 100% of your Crit Damage.", EffectPerLevel = "+33% status crit", ComingSoon = true },
+		Desc = "Status effects can Critically Hit for 33% / 66% / 100% of your Crit Damage.", EffectPerLevel = "+33% status crit" },
 	AS_T3_02 = { Id = "AS_T3_02", Name = "Relic Resonance", Tier = 3, MaxLevel = 5,
 		Costs = { 2, 3, 3, 4, 5 },
 		Desc = "Boosts Relic passives and Star-Force success rates.", EffectPerLevel = "+10% Relic effect, +3% Star-Force" },
@@ -83,7 +83,7 @@ AscensionShopConfig.Nodes = {
 		Desc = "Every attack hits an additional time (Shadow Line) for 15% of hit damage.", EffectPerLevel = "+1 Shadow Line" },
 	AS_T4_02 = { Id = "AS_T4_02", Name = "Miracle Evolution", Tier = 4, MaxLevel = 1,
 		Costs = { 15 },
-		Desc = "Upgrade Orbs have a 15% chance to be Double Orbs (pick 2).", EffectPerLevel = "15% Double Orb", ComingSoon = true },
+		Desc = "Upgrade Orbs have a 15% chance to be Double Orbs (pick 2).", EffectPerLevel = "15% Double Orb" },
 
 	-- Infinite sinks (Rebirth XI+)
 	AS_INF_01 = { Id = "AS_INF_01", Name = "Infinite Spark: Omnipotence", Tier = 4, MaxLevel = 999,

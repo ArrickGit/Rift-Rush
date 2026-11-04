@@ -54,6 +54,9 @@ type AbilityProfile = WeaponConfig.AbilityProfile
 type Offer = {
 	Id: number,
 	Cards: { Upgrade },
+	Picks: number, -- cards still to take from this orb (Miracle Evolution Double Orb = 2)
+	Double: boolean,
+	MinRarity: string?, -- Headstart Blessing floor, kept through rerolls / banishes
 }
 
 type PlayerCombat = {
@@ -97,6 +100,7 @@ type PlayerCombat = {
 	Banishes: number,
 	Offer: Offer?,
 	QueuedOffers: number,
+	HeadstartRarity: string?, -- the next offer is a Headstart Blessing orb with this rarity floor
 	Zones: number,
 }
 
@@ -329,6 +333,14 @@ local CARD = {
 	WAVE_MULT = 0.6,
 	WAVE_SPEED = 60,
 	WAVE_FAN_DEG = 8,
+	-- Ascension nodes wired in game.md A3 (kept here: CombatService is near Luau's 200-local limit)
+	NODE_HEADSTART = "AS_T1_04", -- free Room 1 Upgrade Orb: Common+ / Rare+ / Epic+
+	HEADSTART_RARITY = { "Common", "Rare", "Epic" },
+	HEADSTART_DELAY = 2, -- seconds after the run starts
+	NODE_ELEMENTAL_CRIT = "AS_T3_01", -- Burn ticks / Shock chains can crit for 33% / 66% / 100% of Crit Damage
+	ELEMENTAL_CRIT_PER_LEVEL = 1 / 3,
+	NODE_MIRACLE = "AS_T4_02", -- 15% Double Orbs (pick 2)
+	MIRACLE_CHANCE = 0.15,
 }
 
 -- Ascension Shop node ids (Section 23)
@@ -526,6 +538,7 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 		Banishes = fate + banishPass,
 		Offer = nil,
 		QueuedOffers = 0,
+		HeadstartRarity = nil,
 		Zones = 0,
 	}
 	player:SetAttribute("Combo", 0)
@@ -768,11 +781,14 @@ local function applyBurn(ctx: AttackCtx, enemy: EnemyState, stacks: number)
 	local dps = perSecond * (1 + BURN_STACK_BONUS * (stacks - 1)) * flow
 	local now = os.clock()
 	local existing = enemy.Burn
+	local overload = nodeLevel(ctx.Profile, CARD.NODE_ELEMENTAL_CRIT) * CARD.ELEMENTAL_CRIT_PER_LEVEL
 	enemy.Burn = {
 		Until = now + BURN_SECONDS * flow,
 		Dps = if existing then math.max(existing.Dps, dps) else dps,
 		NextTick = if existing then existing.NextTick else now + BURN_TICK,
 		Source = ctx.Player,
+		CritRate = if overload > 0 then ctx.CritRate else nil,
+		CritBonus = if overload > 0 then (math.max(1.5, ctx.Params.CritDamageMult) - 1) * overload else nil,
 	}
 	enemy.Model:SetAttribute("Burning", true)
 end
@@ -792,14 +808,18 @@ local function chainLightning(ctx: AttackCtx, from: EnemyState, hitDamage: numbe
 		return math.abs(a.Feet.X - fx0) < math.abs(b.Feet.X - fx0)
 	end)
 	local share = CHAIN_MULT + CHAIN_STACK_BONUS * math.max(0, stacks - 1)
+	-- Elemental Crit Overload: each arc can crit for a share of Crit Damage.
+	local overload = nodeLevel(ctx.Profile, CARD.NODE_ELEMENTAL_CRIT) * CARD.ELEMENTAL_CRIT_PER_LEVEL
 	for index = 1, math.min(CHAIN_TARGETS, #candidates) do
 		local target = candidates[index]
 		local tx, ty = target.Feet.X, target.Feet.Y + target.Half.Y
 		fx(ctx.RunId, {
 			Kind = "Chain", From = Vector3.new(fx0, fy0, 0), To = Vector3.new(tx, ty, 0), Owner = ctx.Player.UserId,
 		})
-		damageEnemy(target, math.max(1, math.round(hitDamage * share)), ctx.Player,
-			{ Kind = "Chain", Dir = signOf(tx - fx0) })
+		local crit = overload > 0 and rng:NextNumber() < ctx.CritRate
+		local critMult = if crit then 1 + (math.max(1.5, ctx.Params.CritDamageMult) - 1) * overload else 1
+		damageEnemy(target, math.max(1, math.round(hitDamage * share * critMult)), ctx.Player,
+			{ Kind = "Chain", Dir = signOf(tx - fx0), Crit = crit })
 	end
 end
 
@@ -1371,7 +1391,9 @@ local function tickStatuses(now: number)
 				enemy.Model:SetAttribute("Burning", nil)
 			elseif now >= burn.NextTick then
 				burn.NextTick += BURN_TICK
-				damageEnemy(enemy, math.max(1, math.round(burn.Dps * BURN_TICK)), burn.Source, { Kind = "Dot" })
+				local crit = burn.CritRate ~= nil and rng:NextNumber() < burn.CritRate
+				damageEnemy(enemy, math.max(1, math.round(burn.Dps * BURN_TICK * (if crit then 1 + (burn.CritBonus or 0) else 1))),
+					burn.Source, { Kind = "Dot", Crit = crit })
 			end
 		end
 		local shock = enemy.Shock
@@ -2170,9 +2192,13 @@ end
 -- Upgrades ----------------------------------------------------------------------------------------------------
 
 local function cardPayload(pc: PlayerCombat, card: Upgrade): { [string]: any }
+	local profile = PlayerDataService.Get(pc.Player)
+	local weapon = if profile then getWeapon(profile) else nil
 	return {
 		Id = card.Id, Name = card.Name, Desc = card.Desc, Rarity = card.Rarity, Icon = card.Icon,
 		Stacks = pc.Stacks[card.Id] or 0, MaxStacks = card.MaxStacks,
+		-- 🔥 SYNERGY! ribbon (game.md 3.6): the shared build tag, if any.
+		Synergy = UpgradePoolConfig.SynergyTag(card.Id, if weapon then weapon.Tags else {}, pc.Stacks),
 	}
 end
 
@@ -2193,11 +2219,11 @@ local function sendOffer(pc: PlayerCombat)
 	end
 	offerRemote:FireClient(pc.Player, {
 		Kind = "Offer", OfferId = offer.Id, Cards = cards, Rerolls = pc.Rerolls + bankedRerolls(pc.Player),
-		Banishes = pc.Banishes,
+		Banishes = pc.Banishes, Picks = offer.Picks, Double = offer.Double, Headstart = offer.MinRarity ~= nil,
 	})
 end
 
-local function rollCards(pc: PlayerCombat, count: number, exclude: { [string]: boolean }?): { Upgrade }
+local function rollCards(pc: PlayerCombat, count: number, exclude: { [string]: boolean }?, minRarity: string?): { Upgrade }
 	local run = RunManagerService.GetRunById(pc.RunId)
 	local profile = PlayerDataService.Get(pc.Player)
 	return UpgradePoolConfig.RollCards(count, rng, {
@@ -2206,6 +2232,7 @@ local function rollCards(pc: PlayerCombat, count: number, exclude: { [string]: b
 		Exclude = exclude,
 		Depth = if run then run.Depth else 1,
 		Luck = if profile then linkBonus(profile, "RareUpgradeRate") else 0,
+		MinRarity = minRarity,
 	})
 end
 
@@ -2214,15 +2241,28 @@ local function presentNextOffer(pc: PlayerCombat)
 		return
 	end
 	pc.QueuedOffers -= 1
+	local minRarity = pc.HeadstartRarity
+	pc.HeadstartRarity = nil
 	local count = if pc.Player:GetAttribute("HasVIPArchitect") == true then OFFER_CARDS_VIP else OFFER_CARDS
-	local cards = rollCards(pc, count, nil)
+	local cards = rollCards(pc, count, nil, minRarity)
+	if #cards == 0 and minRarity then
+		minRarity = nil -- every card above the floor is maxed / banished: fall back to the whole pool
+		cards = rollCards(pc, count, nil, nil)
+	end
 	if #cards == 0 then
 		pc.QueuedOffers = 0
 		notify(pc.Player, "Your build has no upgrades left to find!")
 		return
 	end
-	pc.Offer = { Id = nextOfferId, Cards = cards }
+	-- Miracle Evolution: some orbs are Double Orbs (take two of the cards on the table).
+	local profile = PlayerDataService.Get(pc.Player)
+	local double = profile ~= nil and nodeLevel(profile, CARD.NODE_MIRACLE) > 0 and #cards >= 2
+		and rng:NextNumber() < CARD.MIRACLE_CHANCE
+	pc.Offer = { Id = nextOfferId, Cards = cards, Picks = if double then 2 else 1, Double = double, MinRarity = minRarity }
 	nextOfferId += 1
+	if double then
+		notify(pc.Player, "✨ Miracle Evolution! DOUBLE ORB — pick 2 upgrades!")
+	end
 	sendOffer(pc)
 end
 
@@ -2282,12 +2322,20 @@ local function onUpgradeChosen(player: Player, payload: any)
 		if type(index) ~= "number" or index ~= index then
 			return
 		end
-		local card = offer.Cards[math.floor(index)]
+		local slot = math.floor(index)
+		local card = offer.Cards[slot]
 		if not card then
 			return
 		end
-		pc.Offer = nil
 		applyUpgrade(pc, card)
+		-- A Double Orb stays open (minus the taken card) for the second pick.
+		offer.Picks -= 1
+		table.remove(offer.Cards, slot)
+		if offer.Picks > 0 and #offer.Cards > 0 then
+			sendOffer(pc)
+			return
+		end
+		pc.Offer = nil
 		offerRemote:FireClient(player, { Kind = "Closed", OfferId = offer.Id })
 		presentNextOffer(pc)
 	elseif action == "Reroll" then
@@ -2298,7 +2346,7 @@ local function onUpgradeChosen(player: Player, payload: any)
 		for _, card in offer.Cards do
 			exclude[card.Id] = true
 		end
-		local cards = rollCards(pc, #offer.Cards, exclude)
+		local cards = rollCards(pc, #offer.Cards, exclude, offer.MinRarity)
 		if #cards == 0 then
 			return
 		end
@@ -2326,7 +2374,7 @@ local function onUpgradeChosen(player: Player, payload: any)
 		for _, shown in offer.Cards do
 			exclude[shown.Id] = true
 		end
-		local replacement = rollCards(pc, 1, exclude)[1]
+		local replacement = rollCards(pc, 1, exclude, offer.MinRarity)[1]
 		if replacement then
 			offer.Cards[slot] = replacement
 		else
@@ -2433,6 +2481,34 @@ function CombatService.Init()
 	Remotes.GetEvent("CombatDash").OnServerEvent:Connect(onDash)
 	Remotes.GetEvent("UpgradeChosen").OnServerEvent:Connect(onUpgradeChosen)
 	RunManagerService.RoomCleared:Connect(onRoomCleared)
+
+	-- Headstart Blessing: a free Upgrade Orb (Common+ / Rare+ / Epic+) a moment after a run starts in Room 1.
+	local function watchHeadstart(player: Player)
+		player:GetAttributeChangedSignal("RunId"):Connect(function()
+			local runId = player:GetAttribute("RunId")
+			if type(runId) ~= "number" then
+				return
+			end
+			task.delay(CARD.HEADSTART_DELAY, function()
+				local run = RunManagerService.GetRunById(runId)
+				local profile = PlayerDataService.Get(player)
+				local level = if profile then nodeLevel(profile, CARD.NODE_HEADSTART) else 0
+				local pc = getPlayerCombat(player)
+				if level <= 0 or not run or run.Depth ~= 1 or not pc or pc.RunId ~= runId or not isRunAlive(player, runId) then
+					return
+				end
+				local floor = CARD.HEADSTART_RARITY[math.min(level, #CARD.HEADSTART_RARITY)]
+				pc.HeadstartRarity = floor
+				pc.QueuedOffers += 1
+				notify(player, ("🎁 Headstart Blessing: a free %sUpgrade!"):format(if floor == "Common" then "" else floor .. "+ "))
+				presentNextOffer(pc)
+			end)
+		end)
+	end
+	Players.PlayerAdded:Connect(watchHeadstart)
+	for _, player in Players:GetPlayers() do
+		watchHeadstart(player)
+	end
 
 	Players.PlayerRemoving:Connect(function(player: Player)
 		combat[player] = nil

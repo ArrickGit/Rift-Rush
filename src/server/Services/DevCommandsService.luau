@@ -91,6 +91,14 @@ local function run(request: any): string
 			end
 		end)
 		return game:GetService("HttpService"):JSONEncode(before)
+	elseif cmd == "Ascension" and type(request.Id) == "string" then
+		-- { Id, Level } — returns the previous level so a test can restore it.
+		local previous = profile.AscensionNodes[request.Id] or 0
+		PlayerDataService.Mutate(player, function(data)
+			local level = math.max(0, math.floor(tonumber(request.Level) or 0))
+			data.AscensionNodes[request.Id] = (if level > 0 then level else nil) :: any
+		end)
+		return tostring(previous)
 	elseif cmd == "StartRun" then
 		local ok, message = RunManagerService.StartRun({ player }, tonumber(request.World) or 1, tonumber(request.Corruption) or 0)
 		if not ok then

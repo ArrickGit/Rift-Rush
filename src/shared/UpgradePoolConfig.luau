@@ -26,6 +26,7 @@ export type Upgrade = {
 	Icon: string,
 	MaxStacks: number,
 	Mods: { [string]: number },
+	Tags: { string }?, -- build tags (filled from CARD_TAGS below): Burn, Shock, Crit, AoE, Projectile, Summon, Speed
 }
 
 export type RollContext = {
@@ -34,6 +35,7 @@ export type RollContext = {
 	Exclude: { [string]: boolean }?, -- ids already on offer
 	Depth: number, -- current room number
 	Luck: number, -- extra weight on Rare+ (Lucky Draw link skill, Ascension perks)
+	MinRarity: string?, -- only roll this rarity or better (Headstart Blessing orb)
 }
 
 local UpgradePoolConfig = {}
@@ -146,13 +148,64 @@ UpgradePoolConfig.Upgrades = {
 	},
 } :: { Upgrade }
 
+-- Build tags per card (game.md 3.6). A card that shares a tag with the equipped weapon (WeaponConfig Tags) or with
+-- 2+ cards already picked this run wears the 🔥 SYNERGY! ribbon in the picker. Untagged cards are generic stat cards.
+local CARD_TAGS: { [string]: { string } } = {
+	SwiftHands = { "Speed" },
+	KeenEye = { "Crit" },
+	EmberEdge = { "Burn" },
+	StormConduit = { "Shock" },
+	CleavingGale = { "AoE" },
+	TripleThreat = { "Projectile" },
+	NapalmWake = { "Burn", "AoE" },
+	VolatileCinders = { "Burn", "AoE" },
+	Gigantism = { "AoE" },
+	EchoChamber = { "Summon", "Projectile" },
+	ChainReaction = { "AoE", "Shock" },
+	RicochetFrenzy = { "Projectile" },
+	GoldenPinata = { "Crit" },
+	Afterimage = { "Speed" },
+	MeteorShower = { "Burn", "AoE" },
+	WhirlingBlades = { "AoE", "Summon" },
+	PrismaticBarrage = { "Projectile" },
+	RiftOverdrive = { "Speed" },
+}
+
 local byId: { [string]: Upgrade } = {}
 for _, upgrade in UpgradePoolConfig.Upgrades do
+	upgrade.Tags = CARD_TAGS[upgrade.Id] or {}
 	byId[upgrade.Id] = upgrade
 end
 
 function UpgradePoolConfig.Get(id: string): Upgrade?
 	return byId[id]
+end
+
+-- The tag that makes `cardId` a synergy pick, or nil: shared with the weapon first, else with 2+ owned card stacks.
+function UpgradePoolConfig.SynergyTag(cardId: string, weaponTags: { string }, stacks: { [string]: number }): string?
+	local card = byId[cardId]
+	local tags = card and card.Tags
+	if not tags then
+		return nil
+	end
+	for _, tag in tags do
+		if table.find(weaponTags, tag) then
+			return tag
+		end
+	end
+	for _, tag in tags do
+		local owned = 0
+		for id, count in stacks do
+			local other = byId[id]
+			if other and other.Tags and table.find(other.Tags, tag) then
+				owned += count
+			end
+		end
+		if owned >= 2 then
+			return tag
+		end
+	end
+	return nil
 end
 
 -- Sums every owned upgrade's Mods (x stacks) into one table.
@@ -188,8 +241,10 @@ end
 -- Cards still available: not maxed, not banished, not already on the table.
 local function availableByRarity(ctx: RollContext): { [string]: { Upgrade } }
 	local buckets: { [string]: { Upgrade } } = {}
+	local floor = if ctx.MinRarity then table.find(UpgradePoolConfig.RARITY_ORDER, ctx.MinRarity) or 1 else 1
 	for _, upgrade in UpgradePoolConfig.Upgrades do
 		local excluded = ctx.Exclude ~= nil and ctx.Exclude[upgrade.Id] == true
+			or (table.find(UpgradePoolConfig.RARITY_ORDER, upgrade.Rarity) or 1) < floor
 		if not ctx.Banished[upgrade.Id] and not excluded and (ctx.Stacks[upgrade.Id] or 0) < upgrade.MaxStacks then
 			local bucket = buckets[upgrade.Rarity]
 			if not bucket then

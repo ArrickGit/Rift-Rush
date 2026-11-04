@@ -82,6 +82,8 @@ type ActiveRoom = {
 	ChestsForfeited: boolean,
 	PoisonTop: number,
 	CurseOffers: { string }, -- curse ids on this room's altars that nobody has taken yet
+	KillDust: { [Player]: number }, -- room Dust already paid out per kill (subtracted from the room-clear payout)
+	DropPos: Vector3?, -- where the latest boss / opened chest stood (loot beams rise from here)
 }
 
 export type Run = {
@@ -112,6 +114,11 @@ local ROOM_DUST_PER_ROOM = 4
 local ROOM_DUST_FACTOR: { [string]: number } = { Combat = 1.0, Boss = 1.5, Jump = 0.4, Treasure = 0.4 }
 local CHEST_DUST_FACTOR = 0.6
 local CHEST_SHARD_CHANCE = 0.3
+-- Magnetic Dust orbs (game.md 3.5): each kill pays this share of the room's Dust right away, as orbs that fly into the
+-- player; kill payouts stop at KILL_DUST_BUDGET of the room and the room clear pays the rest, so totals are unchanged.
+local KILL_DUST_SHARE: { [string]: number } = { Normal = 0.07, Elite = 0.15, Boss = 0.25 }
+local KILL_DUST_BUDGET = 0.5
+local VACUUM_GOLD_FIND = 0.10 -- Vacuum Aura Lv3: +10% Dust
 local BOSS_SHARD_BASE = 1
 
 local MAX_PLAYERS = 4
@@ -140,6 +147,7 @@ local NODE_POCKET = "AS_T1_05"
 local NODE_GUARDIAN = "AS_T2_03"
 local NODE_TROPHY = "AS_T2_04"
 local NODE_PROSPERITY = "AS_INF_02"
+local NODE_VACUUM = "AS_T1_03"
 
 -- State -------------------------------------------------------------------------------------------------------
 
@@ -161,6 +169,7 @@ RunManagerService.LootEvent = lootEvent.Event :: RBXScriptSignal
 
 local runStateRemote: RemoteEvent
 local notifyRemote: RemoteEvent
+local fxRemote: RemoteEvent
 
 local roomClearedEvent = Instance.new("BindableEvent")
 -- Fires (runId: number, roomNumber: number, players: { Player }) when a room is cleared / its exit is reached.
@@ -320,6 +329,7 @@ end
 local function computeDust(player: Player, profile: PlayerProfileData, run: Run, factor: number): number
 	local rebEco = FormulaEngine.GetRebirthInfo(profile.RebirthTier).EcoMult
 	local sparkEco = 1 + 0.05 * nodeLevel(profile, NODE_PROSPERITY)
+		+ (if nodeLevel(profile, NODE_VACUUM) >= 3 then VACUUM_GOLD_FIND else 0)
 	local mastery = profile.WeaponMastery[profile.EquippedWeapon]
 	local paragon = if mastery then 0.005 * mastery.ParagonRank else 0
 	local linkDust = 1 + getLinkBonus(profile, "DustDropRate") + paragon
@@ -532,6 +542,8 @@ local function spawnChest(run: Run, room: ActiveRoom, position: Vector3)
 			runPlayer.Unsecured.RelicShards += shards
 		end
 		pushState(run, player, "ChestOpened", { Dust = dust, RelicShards = shards })
+		room.DropPos = chest.Position
+		fxRemote:FireClient(player, { Kind = "DustOrbs", Pos = chest.Position + Vector3.new(0, 1.5, 0), Amount = dust, Count = 5 })
 		PlayerDataService.BumpStat(player, "ChestsOpened", 1)
 		QuestService.Track(player, "ChestsOpened", 1)
 		lootEvent:Fire(player, "Chest")
@@ -622,7 +634,8 @@ local function payRoom(run: Run)
 	for player, runPlayer in run.Players do
 		local profile = PlayerDataService.Get(player)
 		if runPlayer.Status == "Alive" and profile then
-			runPlayer.Unsecured.Dust += computeDust(player, profile, run, factor)
+			-- Kill orbs already paid part of it (never more than KILL_DUST_BUDGET).
+			runPlayer.Unsecured.Dust += math.max(0, computeDust(player, profile, run, factor) - (room.KillDust[player] or 0))
 			PlayerDataService.Replicate(player) -- XP / level-ups earned this room
 			table.insert(survivors, player)
 		end
@@ -665,6 +678,7 @@ local function reachAnchor(run: Run)
 			local bonus = if run.Rng:NextNumber() < 0.20 * nodeLevel(profile, NODE_TROPHY) then 1 else 0
 			runPlayer.Unsecured.BossCores += cores + bonus
 			runPlayer.Unsecured.RelicShards += shards + bonus
+			RunManagerService.ShowLootBeam(run, player, ("✨ BOSS CORE x%d!"):format(cores + bonus), false)
 			settle(run, runPlayer, "All")
 			lootEvent:Fire(player, "Anchor")
 			local dropHandler = RunManagerService.RelicDropHandler
@@ -824,6 +838,8 @@ loadRoom = function(run: Run)
 		ChestsForfeited = false,
 		PoisonTop = built.Origin.Y,
 		CurseOffers = {},
+		KillDust = {},
+		DropPos = nil,
 	}
 	run.Room = room
 	run.Phase = "Room"
@@ -1046,10 +1062,17 @@ reportEnemyDefeated = function(enemy: Model, killer: Player?)
 	end
 	room.Enemies[enemy] = nil
 	room.EnemiesLeft -= 1
+	local _, size = enemy:GetBoundingBox()
+	local orbPos = enemy:GetPivot().Position + Vector3.new(0, math.min(size.Y * 0.25, 3), 0)
 	enemy:Destroy()
 
 	local baseXP = enemy:GetAttribute("XPValue")
 	local kind = enemy:GetAttribute("EnemyKind")
+	if kind == "Boss" then
+		room.DropPos = orbPos
+	end
+	local killShare = KILL_DUST_SHARE[if type(kind) == "string" then kind else "Normal"] or KILL_DUST_SHARE.Normal
+	local roomFactor = ROOM_DUST_FACTOR[room.Type] or 1
 	local masteryKind = if kind == "Boss" then (if run.Depth % 10 == 5 then "MiniBoss" else "WorldBoss")
 		elseif kind == "Elite" then "Elite" else "Normal"
 	for player, runPlayer in run.Players do
@@ -1060,6 +1083,17 @@ reportEnemyDefeated = function(enemy: Model, killer: Player?)
 				if levels > 0 then
 					notify(player, ("Level Up! Hunter Level %d"):format(profile.HunterLevel))
 					PlayerDataService.Replicate(player)
+				end
+			end
+			if not room.PaidOut then
+				local roomDust = computeDust(player, profile, run, roomFactor)
+				local paid = room.KillDust[player] or 0
+				local dust = math.min(math.floor(roomDust * KILL_DUST_BUDGET) - paid, math.max(1, math.round(roomDust * killShare)))
+				if dust > 0 then
+					room.KillDust[player] = paid + dust
+					runPlayer.Unsecured.Dust += dust
+					fxRemote:FireClient(player, { Kind = "DustOrbs", Pos = orbPos, Amount = dust,
+						Count = math.clamp(2 + dust // 8, 2, 5) })
 				end
 			end
 			MasteryService.AwardKill(player, masteryKind, run.WorldIndex, run.Corruption)
@@ -1278,6 +1312,21 @@ function RunManagerService.AddUnsecured(player: Player, bag: LootBag)
 	pushState(run, player, "Progress")
 end
 
+-- Rare drop light pillar (game.md 3.5): rises where the boss fell / the chest stood (else at the player) and is seen
+-- by the whole party. Purple by default, gold for the big Room 10-style drops.
+function RunManagerService.ShowLootBeam(run: Run, player: Player, title: string, gold: boolean)
+	local room = run.Room
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local pos = (room and room.DropPos) or (if root and root:IsA("BasePart") then root.Position else nil)
+	if not pos then
+		return
+	end
+	for member in run.Players do
+		fxRemote:FireClient(member, { Kind = "LootBeam", Pos = pos, Title = title, Gold = gold, Owner = player.UserId })
+	end
+end
+
 -- Every live run (HazardService walks them for the acid flood).
 function RunManagerService.GetActiveRuns(): { Run }
 	local list: { Run } = {}
@@ -1406,6 +1455,7 @@ function RunManagerService.Init()
 	Remotes.Init()
 	runStateRemote = Remotes.GetEvent("RunStateChanged")
 	notifyRemote = Remotes.GetEvent("Notify")
+	fxRemote = Remotes.GetEvent("CombatFx")
 
 	Players.RespawnTime = RESPAWN_TIME_OVERRIDE
 

@@ -70,7 +70,8 @@ export type EnemyState = {
 	LastPivot: Vector3,
 	Boss: BossState?,
 	-- Status effects, managed by CombatService
-	Burn: { Until: number, Dps: number, NextTick: number, Source: Player }?,
+	-- CritRate / CritBonus: Elemental Crit Overload (AS_T3_01) lets Burn ticks crit for a share of Crit Damage
+	Burn: { Until: number, Dps: number, NextTick: number, Source: Player, CritRate: number?, CritBonus: number? }?,
 	Shock: { Until: number, Source: Player }?,
 	NovaReadyAt: number,
 }
