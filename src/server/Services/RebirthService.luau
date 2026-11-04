@@ -85,6 +85,7 @@ local function toRoman(n: number): string
 	end
 	return out
 end
+RebirthService.ToRoman = toRoman
 
 -- Dust needed to re-activate a weapon that a Standard rebirth switched off (0 for the default weapon).
 function RebirthService.GetReactivationCost(weaponId: string): number

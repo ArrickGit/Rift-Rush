@@ -17,6 +17,7 @@ local MonetizationService = require(Services:WaitForChild("MonetizationService")
 local WeaponHoldService = require(Services:WaitForChild("WeaponHoldService"))
 local InventoryService = require(Services:WaitForChild("InventoryService"))
 local LeaderboardService = require(Services:WaitForChild("LeaderboardService"))
+local FlexBadgeService = require(Services:WaitForChild("FlexBadgeService"))
 local TownHubService = require(Services:WaitForChild("TownHubService"))
 local DevCommandsService = require(Services:WaitForChild("DevCommandsService"))
 
@@ -34,6 +35,7 @@ MonetizationService.Init() -- the only script that sets MarketplaceService.Proce
 WeaponHoldService.Init() -- equipped weapon welded into every character's hand
 InventoryService.Init() -- Blacksmith / loadout actions
 LeaderboardService.Init()
+FlexBadgeService.Init() -- overhead Rebirth / title / best-room badge in Haven Outpost
 TownHubService.Init() -- builds Haven Outpost and its TownSpawn
 DevCommandsService.Init() -- Studio only: ServerStorage.RiftDev test hooks
 
