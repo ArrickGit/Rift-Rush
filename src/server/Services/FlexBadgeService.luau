@@ -1,10 +1,14 @@
 --!strict
 -- ServerScriptService/Server/Services/FlexBadgeService.luau
 -- Overhead flex badge above every player in Haven Outpost (game.md 6.5 / 7.4 C). A server-built BillboardGui on the
--- head (so everyone sees it) shows three lines:
+-- head (so everyone sees it) shows four lines:
 --   [Rebirth V ⭐] Name   (or [Lv N] Name before the first rebirth)
+--   ⚡ 1,576 Power        (the RiftPower attribute, see below)
 --   a title earned from lifetime stats (best one wins, see TITLES)
 --   🔥 Best: Room N       (Stats.HighestRoom)
+-- This service also owns the player's "RiftPower" attribute (game.md 3.2): FormulaEngine.CalculateRiftPower of the
+-- profile plus the run's picked cards (CombatService's RunCards attribute), recomputed after every profile
+-- replication. The client HUD shows it and pops a "RIFT POWER UP" toast when it rises.
 -- The badge hides while the player is in a run (RunId attribute set) and replaces Roblox's default name tag in town.
 -- It refreshes on spawn, rebirth, entering / leaving a run and after a reforge is applied or kept.
 
@@ -12,6 +16,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local FormulaEngine = require(Shared:WaitForChild("FormulaEngine"))
 local ReforgeConfig = require(Shared:WaitForChild("ReforgeConfig"))
 local InventoryService = require(script.Parent:WaitForChild("InventoryService"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
@@ -28,6 +33,7 @@ local FONT = Enum.Font.FredokaOne
 local NAME_COLOR = Color3.fromRGB(255, 255, 255)
 local REBIRTH_COLOR = Color3.fromRGB(255, 210, 80)
 local BEST_COLOR = Color3.fromRGB(255, 150, 70)
+local POWER_COLOR = Color3.fromRGB(255, 220, 60)
 
 local function stat(profile: PlayerProfileData, key: string): number
 	return profile.Stats[key] or 0
@@ -68,6 +74,23 @@ local function titleFor(profile: PlayerProfileData): Title?
 	return nil
 end
 
+local function commas(value: number): string
+	local text = tostring(math.floor(value))
+	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	return (formatted:gsub("^,", ""))
+end
+
+-- Recomputes the RiftPower attribute; true when it changed. Cards only count while the player is inside a run.
+local function syncPower(player: Player, profile: PlayerProfileData): boolean
+	local cards = if player:GetAttribute("RunId") ~= nil then tonumber(player:GetAttribute("RunCards")) or 0 else 0
+	local power = FormulaEngine.CalculateRiftPower(profile, cards)
+	if player:GetAttribute("RiftPower") == power then
+		return false
+	end
+	player:SetAttribute("RiftPower", power)
+	return true
+end
+
 local function line(parent: Instance, order: number, text: string, color: Color3, size: number)
 	local label = Instance.new("TextLabel")
 	label.LayoutOrder = order
@@ -92,6 +115,7 @@ function FlexBadgeService.Refresh(player: Player)
 	if not (head and head:IsA("BasePart")) or not profile then
 		return
 	end
+	syncPower(player, profile)
 	local old = head:FindFirstChild(BADGE_NAME)
 	if old then
 		old:Destroy()
@@ -107,7 +131,7 @@ function FlexBadgeService.Refresh(player: Player)
 	local gui = Instance.new("BillboardGui")
 	gui.Name = BADGE_NAME
 	gui.Adornee = head
-	gui.Size = UDim2.fromOffset(260, 74)
+	gui.Size = UDim2.fromOffset(260, 96)
 	gui.StudsOffsetWorldSpace = Vector3.new(0, 3.1, 0)
 	gui.MaxDistance = 90
 	gui.LightInfluence = 0
@@ -122,13 +146,14 @@ function FlexBadgeService.Refresh(player: Player)
 		then ("<font color='#%s'>[Rebirth %s ⭐]</font>"):format(REBIRTH_COLOR:ToHex(), RebirthService.ToRoman(profile.RebirthTier))
 		else ("[Lv %d]"):format(profile.HunterLevel)
 	line(gui, 1, ("%s %s"):format(tag, player.DisplayName), NAME_COLOR, 20)
+	line(gui, 2, ("⚡ %s Power"):format(commas(tonumber(player:GetAttribute("RiftPower")) or 0)), POWER_COLOR, 18)
 	local title = titleFor(profile)
 	if title then
-		line(gui, 2, ("« %s »"):format(title.Text), title.Color, 16)
+		line(gui, 3, ("« %s »"):format(title.Text), title.Color, 16)
 	end
 	local best = stat(profile, "HighestRoom")
 	if best > 0 then
-		line(gui, 3, ("🔥 Best: Room %d"):format(best), BEST_COLOR, 14)
+		line(gui, 4, ("🔥 Best: Room %d"):format(best), BEST_COLOR, 14)
 	end
 	gui.Parent = head
 end
@@ -143,6 +168,12 @@ local function watch(player: Player)
 	end)
 	player:GetAttributeChangedSignal("RunId"):Connect(function()
 		FlexBadgeService.Refresh(player)
+	end)
+	player:GetAttributeChangedSignal("RunCards"):Connect(function()
+		local profile = PlayerDataService.Get(player)
+		if profile then
+			syncPower(player, profile)
+		end
 	end)
 	if player.Character then
 		task.spawn(function()
@@ -162,6 +193,13 @@ function FlexBadgeService.Init()
 	end)
 	InventoryService.Reforged:Connect(function(player: Player)
 		FlexBadgeService.Refresh(player)
+	end)
+	-- Level ups, mastery, relic stars, weapon swaps...: any profile change can move Rift Power.
+	PlayerDataService.Replicated:Connect(function(player: Player)
+		local profile = PlayerDataService.Get(player)
+		if profile and syncPower(player, profile) and player:GetAttribute("RunId") == nil then
+			FlexBadgeService.Refresh(player)
+		end
 	end)
 end
 

@@ -91,6 +91,9 @@ local loadedEvent = Instance.new("BindableEvent")
 local profileUpdated: RemoteEvent? = nil
 
 PlayerDataService.ProfileLoaded = loadedEvent.Event :: RBXScriptSignal
+local replicatedEvent = Instance.new("BindableEvent")
+-- Fires after every replication to the owner (i.e. after each Mutate), so derived values like Rift Power can follow.
+PlayerDataService.Replicated = replicatedEvent.Event :: RBXScriptSignal
 
 local function newDefaultProfile(): PlayerProfileData
 	local unlocked: { [string]: boolean } = {}
@@ -282,6 +285,7 @@ function PlayerDataService.Replicate(player: Player)
 	local data = profiles[player]
 	if data and profileUpdated and player.Parent then
 		profileUpdated:FireClient(player, data)
+		replicatedEvent:Fire(player)
 	end
 end
 

@@ -70,8 +70,8 @@
 
 ## 2. Code Facts & Bug Fixes Before Next Sprint
 
-1. **Link Skill Damage Bonus Bug in `CombatService`:** `makeParams` in `CombatService.luau` currently hardcodes `LinkSkillDmgBonus = 0` instead of reading the player's equipped Link Skills. Wire equipped Link Skills so Legion Hall gems apply in combat.
-2. **Wrong Asset Content-Type Warning (`B9` / Playtest Output):** Locate any asset ID throwing an incompatible content-type warning in the Studio console and remove or replace it.
+1. ~~**Link Skill Damage Bonus Bug in `CombatService`:**~~ **Not a bug (checked 2026-11-04, A1):** all 8 Link Skills already apply in combat through their own stats — `CritDamage` / `CritRate` in `makeParams` / `makeAttackCtx`, `NormalEliteDamage` / `BossDamage` as `NormalBonus` / `BossBonus`, `AttackSpeedCooldown` in attack interval + Q cooldown, `StatusDamageDuration` on burn/shock, `DustDropRate` in `RunManagerService`, `RareUpgradeRate` as card Luck. No Link Skill is a flat "+% damage" stat, so `LinkSkillDmgBonus = 0` is correct (now commented).
+2. **Wrong Asset Content-Type Warning (`B9` / Playtest Output):** `rbxassetid://203785492` ("Asset type does not match") — not in `src/` and not referenced by any instance in the server or client DataModel during play (scanned 2026-11-04). Most likely an accessory on the Studio test avatar, i.e. not the game's; ignore unless it shows up for other players.
 3. **New Card Icons Fallback:** Only the original 10 cards have `Card_*` keys in `AssetRegistry.Icons`; ensure the 10 new cards (`UP_11` to `UP_20`) either map to existing uploaded icons in `AssetRegistry.Icons` or render their crisp emoji/glyph cleanly.
 
 ---
@@ -139,7 +139,7 @@
 
 > **INSTRUCTIONS FOR CLAUDE CODE:** Execute these in order on `main` (using **Sonnet** by default). Run `./luau-lsp analyze` after each item, update the Section 5 Changelog, and commit.
 
-1. **Step A1 — Quick Bug Fix (`LinkSkillDmgBonus`) & `⚡ Rift Power` Counter (3.2):**
+1. ✅ **Step A1 — Quick Bug Fix (`LinkSkillDmgBonus`) & `⚡ Rift Power` Counter (3.2):** *(done — see Section 5)*
    * Fix `LinkSkillDmgBonus = 0` in `CombatService.luau` so socketed Link Skills apply in combat.
    * Add `FormulaEngine.CalculateRiftPower`, display **`⚡ Power: N`** on the HUD and Town `FlexBadgeService`, and fire the animated `+Power` popup toast whenever the player's power increases.
 2. **Step A2 — Instant-Action First Join + Waypoint Decluttering + `⚔️ Auto-Attack` Toggle (3.1, 3.3, 3.4):**
@@ -167,3 +167,4 @@
 | 2026-11-04 | `3339222` | `main` | **(A) 10 screen-breaking cards:** Added *Gigantism, Echo Chamber, Chain Reaction, Ricochet Frenzy, Golden Piñata, Afterimage, Meteor Shower, Whirling Blades, Prismatic Barrage, Rift Overdrive* with projectile/number caps, coin fountains, and orbiting blades. |
 | 2026-11-04 | `1a273f3` | `main` | **(B) Weapon Reforge (`ReforgeConfig`, `ReforgeSection`):** 5 tiers (*Sharp* $60\%$ to *Rift Sovereign* $1\%$), dual pity counters (13 / 60), Keep/Discard pending state, weapon particle auras + halo/wings, and server-wide Mythic celebration + chat announcement. |
 | 2026-11-04 | `7a0ea93` | `main` | **(C) Town flex badges (`FlexBadgeService`):** Overhead server `BillboardGui` in Haven Outpost displaying `[Rebirth R ⭐] Name`, highest earned title (*Rift Sovereign, Boss Breaker, Mushroom Slayer, Rift Delver*), and `🔥 Best: Room N`. |
+| 2026-11-04 | *(A1)* | `main` | **A1 `⚡ Rift Power` (3.2):** `FormulaEngine.CalculateRiftPower` (weapon DPS × 20 base ≈ 1,000 for a new hunter; Legacy levels count as Hunter levels so a rebirth doesn't crater it; mastery counts levels above 1; +15% per run card). `FlexBadgeService` owns the `RiftPower` attribute (recomputed on the new `PlayerDataService.Replicated` signal + CombatService's `RunCards` attribute) and shows `⚡ N Power` on the overhead badge. New `RiftPowerController`: gold `⚡ Power: N` badge on top of the HUD vitals column + bottom-centre `⚡ RIFT POWER UP! a » b (+c)` toast with roll-up counter, `flare_01` burst and pitched `UI_Unlock` chime; rises within 2.2s merge into one toast. Link Skill "bug" (§2.1) was a false alarm — commented. Studio-tested: mastery 6→8 and 2 cards (4,122 → 5,358, exactly +15%/card), toast clear of notify toasts, no console errors. |

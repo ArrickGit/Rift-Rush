@@ -533,6 +533,7 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 	local size = runSize(pc.Mods, profile) -- Gigantism / Mythic reforge (client swing prediction + projectile visuals)
 	player:SetAttribute("SizeScale", if size > 1 then size else nil)
 	player:SetAttribute("RunBlades", nil) -- Whirling Blades count (client draws the orbit)
+	player:SetAttribute("RunCards", nil) -- upgrade cards picked this run (Rift Power, FlexBadgeService)
 	return pc
 end
 
@@ -579,7 +580,7 @@ local function makeParams(profile: PlayerProfileData, weapon: WeaponInfo, pc: Pl
 		IsPureRun = false,
 		AscendantMightLv = nodeLevel(profile, NODE_MIGHT),
 		InfOmnipotenceLv = nodeLevel(profile, NODE_OMNIPOTENCE),
-		LinkSkillDmgBonus = 0,
+		LinkSkillDmgBonus = 0, -- no Link Skill is a flat damage bonus; each one applies through its own stat below
 		RelicDmgBonus = 0,
 		RelicResonanceLv = nodeLevel(profile, NODE_RELIC_RESONANCE),
 		RunAdditiveBonus = mods.AdditiveDmg or 0,
@@ -2259,6 +2260,11 @@ local function applyUpgrade(pc: PlayerCombat, card: Upgrade)
 	pc.Player:SetAttribute("SizeScale", if size > 1 then size else nil)
 	local blades = math.min(CARD.BLADES_MAX, pc.Mods.OrbitBlades or 0)
 	pc.Player:SetAttribute("RunBlades", if blades > 0 then blades else nil)
+	local picked = 0
+	for _, count in pc.Stacks do
+		picked += count
+	end
+	pc.Player:SetAttribute("RunCards", picked)
 end
 
 local function onUpgradeChosen(player: Player, payload: any)

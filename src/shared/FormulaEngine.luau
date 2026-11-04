@@ -233,4 +233,39 @@ function FormulaEngine.GetCappedEnvMult(runWorld: number, runCorruption: number,
 	return math.min(runEnv, 3.0 * ownEnv)
 end
 
+-- The parts of a profile Rift Power reads (kept structural so this shared module needs no server types).
+export type PowerProfile = {
+	EquippedWeapon: string,
+	HunterLevel: number,
+	LegacyBonusLevels: number,
+	RebirthTier: number,
+	WeaponMastery: { [string]: any }, -- entries have .Level
+	WeaponReforge: { [string]: any },
+	RelicStars: { [string]: any }, -- entries have .Stars
+}
+
+-- One big "⚡ Rift Power" number for the HUD and the town badge (game.md 3.2). The weapon base is its DPS x 20 so a
+-- fresh hunter starts near 1,000. Legacy levels count as Hunter levels so a rebirth doesn't crater the number, and
+-- mastery counts levels above 1 so only earned levels add. Each in-run upgrade card is worth +15%.
+function FormulaEngine.CalculateRiftPower(profile: PowerProfile, inRunUpgrades: number?): number
+	local WeaponConfig = require(script.Parent:WaitForChild("WeaponConfig")) :: any
+	local ReforgeConfig = require(script.Parent:WaitForChild("ReforgeConfig")) :: any
+	local weapon = WeaponConfig.Weapons[profile.EquippedWeapon] or WeaponConfig.Weapons[WeaponConfig.DEFAULT_WEAPON]
+	local base = weapon.BaseDamage * weapon.AttacksPerSecond * 20
+	local levels = 1 + 0.08 * (profile.HunterLevel + profile.LegacyBonusLevels)
+	local rebirth = FormulaEngine.GetRebirthInfo(profile.RebirthTier).DmgMult
+	local tier = ReforgeConfig.ForWeapon(profile.WeaponReforge, weapon.Id)
+	local reforge = 1 + (if tier then tier.Dmg else 0)
+	local mastery = 0
+	for _, entry in profile.WeaponMastery do
+		mastery += math.max(0, entry.Level - 1)
+	end
+	local stars = 0
+	for _, relic in profile.RelicStars do
+		stars += relic.Stars
+	end
+	return math.round(base * levels * rebirth * reforge * (1 + 0.05 * mastery) * (1 + 0.12 * stars)
+		* (1 + 0.15 * (inRunUpgrades or 0)))
+end
+
 return FormulaEngine
