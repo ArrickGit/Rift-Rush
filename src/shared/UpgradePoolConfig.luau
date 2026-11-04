@@ -39,7 +39,7 @@ export type RollContext = {
 local UpgradePoolConfig = {}
 
 UpgradePoolConfig.RARITY_ORDER = { "Common", "Rare", "Epic", "Legendary", "Corrupted" }
-UpgradePoolConfig.BASE_WEIGHTS = { Common = 55, Rare = 28, Epic = 12, Legendary = 4, Corrupted = 1 } :: { [string]: number }
+UpgradePoolConfig.BASE_WEIGHTS = { Common = 53, Rare = 28, Epic = 12, Legendary = 6, Corrupted = 1 } :: { [string]: number }
 
 -- Every 5 rooms cleared moves 5 weight points out of Common (Section 12): split across the higher rarities.
 local DEPTH_SHIFT_PER_5_ROOMS = 5
@@ -91,6 +91,58 @@ UpgradePoolConfig.Upgrades = {
 		Id = "VolatileCinders", Name = "Volatile Cinders", Rarity = "Legendary", Icon = "💥", MaxStacks = 1,
 		Desc = "Enemies that die while Burning explode for 160% damage and spread their Burn.",
 		Mods = { BurnBlast = 1 },
+	},
+
+	-- Screen-breaking cards (game.md 6.2 / 7.4) ----------------------------------------------------------------
+	{
+		Id = "Gigantism", Name = "Gigantism", Rarity = "Legendary", Icon = "🦣", MaxStacks = 1,
+		Desc = "Your swings, projectiles, pillars and spirit bolts grow 100% LARGER and deal +40% damage.",
+		Mods = { SizeMult = 1.0, AdditiveDmg = 0.40 },
+	},
+	{
+		Id = "EchoChamber", Name = "Echo Chamber", Rarity = "Epic", Icon = "🔁", MaxStacks = 1,
+		Desc = "Your active ability casts again 0.25s later for 85% damage. Summons are doubled instead.",
+		Mods = { EchoCast = 1 },
+	},
+	{
+		Id = "ChainReaction", Name = "Chain Reaction", Rarity = "Legendary", Icon = "☢️", MaxStacks = 1,
+		Desc = "Kills detonate a nova for 60% damage. Novas that kill detonate again (up to 5 links, 10% weaker each).",
+		Mods = { ChainReaction = 1 },
+	},
+	{
+		Id = "RicochetFrenzy", Name = "Ricochet Frenzy", Rarity = "Rare", Icon = "🪃", MaxStacks = 2,
+		Desc = "Projectiles bounce to +2 more enemies. Melee hits fling a ricocheting blade shard for 40% damage.",
+		Mods = { Ricochet = 2 },
+	},
+	{
+		Id = "GoldenPinata", Name = "Golden Piñata", Rarity = "Epic", Icon = "🪅", MaxStacks = 2,
+		Desc = "Critical hits have a 20% chance to burst into a fountain of Rift Dust.",
+		Mods = { PinataChance = 0.20 },
+	},
+	{
+		Id = "Afterimage", Name = "Afterimage", Rarity = "Epic", Icon = "👥", MaxStacks = 1,
+		Desc = "A phantom repeats every basic attack 0.18s later for 50% damage.",
+		Mods = { Afterimage = 1 },
+	},
+	{
+		Id = "MeteorShower", Name = "Meteor Shower", Rarity = "Legendary", Icon = "☄️", MaxStacks = 1,
+		Desc = "Every 6s, up to 5 meteors crash onto nearby enemies for 120% damage, exploding and Burning.",
+		Mods = { MeteorShower = 1 },
+	},
+	{
+		Id = "WhirlingBlades", Name = "Whirling Blades", Rarity = "Epic", Icon = "⚔️", MaxStacks = 3,
+		Desc = "2 spectral blades orbit you, shredding nearby enemies for 35% damage per blade each second (+2 blades per stack).",
+		Mods = { OrbitBlades = 2 },
+	},
+	{
+		Id = "PrismaticBarrage", Name = "Prismatic Barrage", Rarity = "Rare", Icon = "🌈", MaxStacks = 2,
+		Desc = "Every 3.5s in combat, fire a ring of 8 piercing rainbow bolts for 55% damage each (+8 bolts per stack).",
+		Mods = { BarrageBolts = 8 },
+	},
+	{
+		Id = "RiftOverdrive", Name = "Rift Overdrive", Rarity = "Rare", Icon = "⏩", MaxStacks = 2,
+		Desc = "-25% active ability cooldown.",
+		Mods = { AbilityCdr = 0.25 },
 	},
 } :: { Upgrade }
 

@@ -14,15 +14,17 @@
 -- never echoes a swing back to the player who swung.
 --
 -- CombatFx payload shapes (all fields set by CombatService / EnemyAIService):
---   Swing{Owner,Weapon,Style,Pos,Facing,Range,Height}  Proj{Id,Style,Pos,Vel,Life,HalfX,HalfY,Owner}  ProjEnd{Id,Pos,Hit}
+--   Swing{Owner,Weapon,Style,Pos,Facing,Range,Height}  Proj{Id,Style,Pos,Vel,Life,HalfX,HalfY,Owner,Scale?}  ProjEnd{Id,Pos,Hit}
 --   ProjReflect{Id,Pos,Vel}  Burst{Pos,Radius,Style,Owner}  Telegraph{Pos,Size,Duration,Style}
 --   Sweep{Pos,HalfX,Style,Duration}  Chain{From,To,Owner}  Zone{Pos,HalfX,HalfY,Duration,Owner}
 --   Shake{Intensity,Duration}  Roar{Pos}  Pillar{Pos,HalfX,Height,Owner}  ProjRedirect{Id,Pos,Vel}
 --   CardDraw{Card,Pos,Owner}  Summon{Id,Owner,Offset,Duration,Style}  SummonEnd{Id}
 --   SelfLaunch{Speed} / PoisonBounce{Speed} (sent only to the player they move; the client owns its physics)
+--   Pinata{Pos,Amount,Owner} (Golden Piñata Dust fountain)
 --
--- Also drawn here: Hungry Coin orbit coins around anyone whose "RunRelics" attribute lists REL_04, and a quick
--- arm-swing on every attack (the right shoulder Motor6D is overridden for a moment after the Animator runs).
+-- Also drawn here: Hungry Coin orbit coins around anyone whose "RunRelics" attribute lists REL_04, Whirling Blades
+-- around anyone in a run with a "RunBlades" attribute (sized by "SizeScale"), and a quick arm-swing on every attack
+-- (the right shoulder Motor6D is overridden for a moment after the Animator runs).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -87,6 +89,9 @@ local CARD_COLORS: { [string]: Color3 } = {
 local CARD_TEXT: { [string]: string } = { Red = "♥ RED BLAST", Blue = "♠ BLUE -2s Q", Gold = "♦ GOLD +15 DUST" }
 local SWING_SECONDS = 0.22
 local ORBIT_RADIUS = 4.2
+local BLADE_ORBIT_RADIUS = 5 -- x SizeScale; the server hits within 6 x SizeScale
+local BLADE_COLOR = Color3.fromRGB(110, 235, 255)
+local PINATA_GOLD = Color3.fromRGB(255, 205, 60)
 
 local NUMBER_STYLES: { [string]: { Color: Color3, Size: number } } = {
 	Hit = { Color = Color3.fromRGB(255, 255, 255), Size = 26 },
@@ -135,6 +140,7 @@ local CombatVFXController = {}
 
 local summonVisuals: { [number]: SummonVisual } = {}
 local orbitCoins: { [Player]: { Part } } = {}
+local orbitBlades: { [Player]: { Part } } = {}
 local swingAnims: { [Model]: number } = {} -- character -> swing start time
 local lastLocalWeapon = WeaponConfig.DEFAULT_WEAPON -- picks heavy vs light hit sounds
 local swingToggle = false -- alternates Combat_Swing1 / Combat_Swing2
@@ -400,15 +406,16 @@ end
 
 -- Projectiles ---------------------------------------------------------------------------------------------------
 
-local function projectileShape(style: string, halfX: number, halfY: number): (Enum.PartType, Vector3)
+-- `scale` (Gigantism) grows the fixed-size shapes; the half-size ones already arrive scaled from the server.
+local function projectileShape(style: string, halfX: number, halfY: number, scale: number): (Enum.PartType, Vector3)
 	if style == "Arrow" then
-		return Enum.PartType.Block, Vector3.new(2.6, 0.22, 0.22)
+		return Enum.PartType.Block, Vector3.new(2.6, 0.22, 0.22) * scale
 	elseif style == "Lightning" then
-		return Enum.PartType.Block, Vector3.new(2.2, 0.32, 0.32)
+		return Enum.PartType.Block, Vector3.new(2.2, 0.32, 0.32) * scale
 	elseif style == "Card" then
-		return Enum.PartType.Block, Vector3.new(1.3, 0.85, 0.08)
+		return Enum.PartType.Block, Vector3.new(1.3, 0.85, 0.08) * scale
 	elseif style == "Spirit" then
-		return Enum.PartType.Ball, Vector3.one * 1.1
+		return Enum.PartType.Ball, Vector3.one * 1.1 * scale
 	elseif style == "Fireball" then
 		return Enum.PartType.Ball, Vector3.one * (halfX * 2.4)
 	elseif style == "Boulder" then
@@ -416,7 +423,7 @@ local function projectileShape(style: string, halfX: number, halfY: number): (En
 	elseif style == "Wave" then
 		return Enum.PartType.Block, Vector3.new(0.9, halfY * 2, 5)
 	elseif style == "Blade" then
-		return Enum.PartType.Block, Vector3.new(2.4, 0.35, 1)
+		return Enum.PartType.Block, Vector3.new(2.4, 0.35, 1) * scale
 	elseif style == "Shockwave" then
 		return Enum.PartType.Block, Vector3.new(halfX * 2, halfY * 2, 8)
 	end
@@ -436,7 +443,7 @@ local function spawnProjectile(payload: { [string]: any })
 	removeProjectile(id)
 	local style = payload.Style :: string
 	local owner = payload.Owner :: number
-	local shape, size = projectileShape(style, payload.HalfX, payload.HalfY)
+	local shape, size = projectileShape(style, payload.HalfX, payload.HalfY, tonumber(payload.Scale) or 1)
 	local vel = payload.Vel :: Vector3
 	local part = acquirePart(shape, size, CFrame.new(payload.Pos), colorOf(style), throttled(0.05, opacityOf(owner)))
 	projVisuals[id] = {
@@ -690,6 +697,31 @@ local function spawnCardDraw(card: string, pos: Vector3, owner: number)
 	end)
 end
 
+-- Golden Piñata: a flare and a little fountain of gold coins arcing out of the enemy.
+local function spawnPinata(pos: Vector3, amount: number, owner: number)
+	local opacity = opacityOf(owner)
+	emitSprite("flare_01", pos, PINATA_GOLD, 5, 0.4, 1, owner)
+	emitSprite("star_04", pos, PINATA_GOLD, 1.6, 0.6, 6, owner, 16)
+	local count = math.clamp(3 + amount // 4, 3, 8)
+	for _ = 1, count do
+		local coin = acquirePart(Enum.PartType.Cylinder, Vector3.new(0.18, 0.9, 0.9), CFrame.new(pos), PINATA_GOLD, throttled(0, opacity))
+		local velocity = Vector3.new(rng:NextNumber(-9, 9), rng:NextNumber(16, 26), 0)
+		local spin = rng:NextNumber(6, 14)
+		local spot = pos
+		addEffect(0.8, owner, function(alpha: number, dt: number)
+			velocity += Vector3.new(0, -60 * dt, 0)
+			spot += velocity * dt
+			coin.CFrame = CFrame.new(spot) * CFrame.Angles(0, alpha * spin, math.pi / 2)
+			coin.Transparency = throttled(math.max(0, alpha - 0.65) / 0.35, opacity)
+		end, function()
+			releasePart(coin)
+		end)
+	end
+	if owner == localUserId then
+		Sfx.Play("Item_Drop", 0.5)
+	end
+end
+
 local function characterRoot(userId: number): BasePart?
 	local owner = Players:GetPlayerByUserId(userId)
 	local character = owner and owner.Character
@@ -803,6 +835,61 @@ local function stepOrbits(now: number)
 			local angle = now * 4 + index * math.pi
 			coin.CFrame = CFrame.new(root.Position + Vector3.new(math.cos(angle) * ORBIT_RADIUS, 0.4 + math.sin(now * 3) * 0.3, math.sin(angle) * ORBIT_RADIUS))
 				* CFrame.Angles(0, now * 6, 0)
+		end
+	end
+end
+
+local function clearParts(map: { [Player]: { Part } }, owner: Player)
+	local parts = map[owner]
+	if parts then
+		for _, part in parts do
+			part:Destroy()
+		end
+		map[owner] = nil
+	end
+end
+
+-- Whirling Blades: cyan blades circling each player on the combat plane (re-built when the count or size changes).
+local function stepBlades(now: number)
+	for _, other in Players:GetPlayers() do
+		local count = other:GetAttribute("RunBlades")
+		local scale = tonumber(other:GetAttribute("SizeScale")) or 1
+		local character = other.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		local inRun = other:GetAttribute("RunId") ~= nil
+		if type(count) ~= "number" or count <= 0 or not inRun or not (root and root:IsA("BasePart")) then
+			clearParts(orbitBlades, other)
+			continue
+		end
+		local blades: { Part }? = orbitBlades[other]
+		if blades and (#blades ~= count or math.abs(blades[1].Size.X - 2.2 * scale) > 0.01) then
+			clearParts(orbitBlades, other)
+			blades = nil
+		end
+		if not blades then
+			local created: { Part } = {}
+			for _ = 1, count do
+				local blade = Instance.new("Part")
+				blade.Size = Vector3.new(2.2, 0.3, 0.8) * scale
+				blade.Color = BLADE_COLOR
+				blade.Material = Enum.Material.Neon
+				blade.Transparency = throttled(0.15, opacityOf(other.UserId))
+				blade.Anchored = true
+				blade.CanCollide = false
+				blade.CanQuery = false
+				blade.CanTouch = false
+				blade.CastShadow = false
+				blade.Parent = fxFolder
+				table.insert(created, blade)
+			end
+			orbitBlades[other] = created
+			blades = created
+		end
+		local radius = BLADE_ORBIT_RADIUS * scale
+		for index, blade in blades :: { Part } do
+			local angle = now * 5 + (index / count) * math.pi * 2
+			local center = root.Position + Vector3.new(math.cos(angle) * radius, math.sin(angle) * radius, 0)
+			blade.CFrame = CFrame.new(center) * CFrame.Angles(0, 0, angle + math.pi / 2 + now * 9)
 		end
 	end
 end
@@ -934,6 +1021,8 @@ local function handleFx(payload: any)
 	elseif kind == "Roar" then
 		spawnBurst(payload.Pos, 22, "Roar", 0)
 		emitSprite("light_01", payload.Pos, colorOf("Roar"), 26, 0.5, 1, 0)
+	elseif kind == "Pinata" then
+		spawnPinata(payload.Pos, tonumber(payload.Amount) or 1, payload.Owner or 0)
 	end
 end
 
@@ -954,7 +1043,8 @@ function CombatVFXController.PlaySwing(weaponId: string, facing: number)
 	if profile.Kind ~= "Melee" then
 		return -- projectile weapons are drawn from the server's Proj event
 	end
-	spawnSwing(profile.Style, weapon.Accent, root.Position, facing, profile.Range, localUserId)
+	local scale = if localPlayer:GetAttribute("RunId") ~= nil then tonumber(localPlayer:GetAttribute("SizeScale")) or 1 else 1
+	spawnSwing(profile.Style, weapon.Accent, root.Position, facing, profile.Range * scale, localUserId)
 end
 
 function CombatVFXController.Init()
@@ -993,13 +1083,8 @@ function CombatVFXController.Init()
 		stepArmSwings(os.clock())
 	end)
 	Players.PlayerRemoving:Connect(function(other: Player)
-		local coins = orbitCoins[other]
-		if coins then
-			for _, coin in coins do
-				coin:Destroy()
-			end
-			orbitCoins[other] = nil
-		end
+		clearParts(orbitCoins, other)
+		clearParts(orbitBlades, other)
 	end)
 
 	Remotes.GetEvent("RunStateChanged").OnClientEvent:Connect(function(payload: any)
@@ -1030,6 +1115,7 @@ function CombatVFXController.Init()
 		stepNumbers(now)
 		stepSummons(now, dt)
 		stepOrbits(now)
+		stepBlades(now)
 		for index = #effects, 1, -1 do
 			local effect = effects[index]
 			local alpha = (now - effect.Born) / effect.Life

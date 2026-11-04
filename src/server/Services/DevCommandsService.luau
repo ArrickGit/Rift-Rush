@@ -5,14 +5,18 @@
 --   { Cmd = "Equip", Weapon = "Bow" }            unlocks + equips, even mid-run
 --   { Cmd = "Relic", Id = "REL_04", Stars = 3 }    adds to the collection and the current run
 --   { Cmd = "Mastery", Weapon = "Bow", Level = 10 }
+--   { Cmd = "GiveUpgrade", Id = "Gigantism" }      adds one stack of a run card (must be inside a run)
+--   { Cmd = "StartRun", World = 1, Corruption = 0 } solo run, as if through the Rift Gate
 -- The first player in the server is the target unless Player = <name> is given.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 
+local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
 local RelicService = require(script.Parent:WaitForChild("RelicService"))
+local RunManagerService = require(script.Parent:WaitForChild("RunManagerService"))
 local WeaponHoldService = require(script.Parent:WaitForChild("WeaponHoldService"))
 
 local DevCommandsService = {}
@@ -56,6 +60,15 @@ local function run(request: any): string
 			data.WeaponMastery[request.Weapon] = { Level = tonumber(request.Level) or 1, XP = 0, ParagonRank = tonumber(request.Paragon) or 0 }
 		end)
 		WeaponHoldService.Refresh(player)
+	elseif cmd == "GiveUpgrade" and type(request.Id) == "string" then
+		if not CombatService.GiveUpgrade(player, request.Id) then
+			return "not in a run, or unknown upgrade id"
+		end
+	elseif cmd == "StartRun" then
+		local ok, message = RunManagerService.StartRun({ player }, tonumber(request.World) or 1, tonumber(request.Corruption) or 0)
+		if not ok then
+			return message
+		end
 	else
 		return "unknown command"
 	end

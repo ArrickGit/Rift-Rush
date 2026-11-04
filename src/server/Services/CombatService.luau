@@ -13,7 +13,10 @@
 --     Vampiric Fang, Broken Crown, Volatile Hourglass. Shields (Seismic Impact, Frost Heart) absorb damage first.
 --   * Projectiles for both teams (player bolts / abilities, boss shockwaves / boulders). Spore boulders can be
 --     smacked back with a basic attack to stun the Mushroom Titan.
---   * Run upgrades: rolling cards on RoomCleared, Pick / Reroll / Banish, and the build's stat totals.
+--   * Run upgrades: rolling cards on RoomCleared, Pick / Reroll / Banish, and the build's stat totals. The
+--     screen-breaking cards (game.md 7.4: Gigantism, Echo Chamber, Chain Reaction, Ricochet Frenzy, Golden Piñata,
+--     Afterimage, Meteor Shower, Whirling Blades, Prismatic Barrage, Rift Overdrive) are tuned in `CARD` below.
+--     Player projectiles are capped per run and plain damage numbers per flush so a god build can't flood the server.
 --   * Player damage, so EnemyAIService can hurt players without knowing about i-frames.
 --
 -- Player attributes this service publishes for the HUD: Combo, AttackInterval, Ability1ReadyAt (server time),
@@ -77,7 +80,15 @@ type PlayerCombat = {
 	PhoenixUsed: boolean,
 	FrostReadyAt: number,
 	FangReadyAt: number,
-	OrbitAt: number, -- next Hungry Coin orbit tick
+	OrbitAt: number, -- next Hungry Coin / Whirling Blades orbit tick
+	MeteorAt: number, -- Meteor Shower: next volley
+	BarrageAt: number, -- Prismatic Barrage: next ring
+	PinataAt: number, -- Golden Piñata: per-burst cooldown
+	PinataDust: number, -- Dust waiting for the next batched pouch flush
+	PinataFlushAt: number,
+	PinataRoom: number, -- bursts so far in the current room
+	PinataDepth: number, -- room number PinataRoom counts for
+	ShardAt: number, -- Ricochet Frenzy: next melee blade shard
 	Stacks: { [string]: number },
 	Mods: { [string]: number },
 	Banished: { [string]: boolean },
@@ -114,7 +125,19 @@ type Projectile = {
 	Reflected: boolean,
 	Bounces: number, -- Trick Cards: hops to the nearest other enemy after a hit
 	Focus: boolean, -- Bow: counts toward Hurricane Focus
+	Detonate: boolean, -- explodes when it expires too (Meteor Shower meteors land on the spot)
+	Counted: boolean, -- counts toward the per-run player projectile cap
 	Hit: { [any]: boolean },
+}
+
+-- Chain Reaction: a kill's pending nova (Gen 0 = from a normal kill, +1 for every nova kill in the chain).
+type Nova = {
+	Player: Player,
+	RunId: number,
+	X: number,
+	Y: number,
+	Gen: number,
+	At: number,
 }
 
 type Summon = {
@@ -151,6 +174,9 @@ type AttackCtx = {
 	BossBonus: number,
 	ForceCrit: boolean,
 	Relics: { [string]: number }, -- active relic id -> stars
+	Size: number, -- Gigantism: scales hitboxes, projectiles, pillars and blasts
+	SkillScale: number, -- multiplies every SkillMultiplier (Echo Chamber recasts, Afterimage phantoms)
+	Phantom: boolean, -- an Afterimage repeat: no finisher count, shield, bell focus or momentum
 }
 
 type StrikeFlags = {
@@ -230,7 +256,10 @@ local DECK_BLUE_SECONDS = 2
 local DECK_GOLD_DUST = 15
 local CARD_BOUNCE_RANGE = 14
 local SUMMON_RANGE = 34
-local SUMMON_OFFSETS = { Vector3.new(-2.6, 3.4, 0), Vector3.new(2.6, 3.8, 0), Vector3.new(0, 5, 0) }
+local SUMMON_OFFSETS = {
+	Vector3.new(-2.6, 3.4, 0), Vector3.new(2.6, 3.8, 0), Vector3.new(0, 5, 0),
+	Vector3.new(-4.6, 2.2, 0), Vector3.new(4.6, 2.4, 0), Vector3.new(0, 7.2, 0), -- Echo Chamber's doubled pack
+}
 local RAIN_SEEK_RANGE = 28
 local THUNDER_RANGE = 30
 local THUNDER_SPEED = 95
@@ -247,6 +276,54 @@ local NUMBER_FLUSH_SECONDS = 0.1
 
 local OFFER_CARDS = 3
 local OFFER_CARDS_VIP = 4
+
+-- Screen-breaking cards (game.md 7.4). One table: this module is close to Luau's 200-local limit.
+local CARD = {
+	SIZE_MAX = 2.5,
+	PROJECTILE_CAP = 160, -- live player projectiles per run
+	NUMBER_CAP = 80, -- plain damage numbers per flush; past this only crits / kills / player hits are sent
+	SUMMON_CAP = 3,
+	ECHO_SUMMON_CAP = 6,
+	ECHO_DELAY = 0.25,
+	ECHO_MULT = 0.85,
+	AFTERIMAGE_DELAY = 0.18,
+	AFTERIMAGE_MULT = 0.5,
+	NOVA_RADIUS = 8,
+	NOVA_MULT = 0.60,
+	NOVA_FALLOFF = 0.9, -- per generation
+	NOVA_GENERATIONS = 5,
+	NOVA_PER_STEP = 4,
+	NOVA_VICTIMS = 10,
+	NOVA_QUEUE = 40,
+	NOVA_DELAY = 0.12, -- each link of the chain pops a beat after the kill that caused it
+	SHARD_MULT = 0.4,
+	SHARD_COOLDOWN = 0.25,
+	SHARD_RANGE = 18,
+	SHARD_SPEED = 80,
+	PINATA_MAX = 0.6,
+	PINATA_COOLDOWN = 0.15,
+	PINATA_PER_ROOM = 25,
+	PINATA_FLUSH = 0.5,
+	METEOR_EVERY = 6,
+	METEOR_COUNT = 5,
+	METEOR_RANGE = 40,
+	METEOR_MULT = 1.2,
+	METEOR_RADIUS = 7,
+	METEOR_HEIGHT = 26,
+	METEOR_SPEED = 60,
+	BLADES_MAX = 6,
+	BLADE_RADIUS = 6,
+	BLADE_MULT = 0.35, -- per blade per second
+	BLADE_VICTIMS = 12,
+	BARRAGE_EVERY = 3.5,
+	BARRAGE_RANGE = 30,
+	BARRAGE_MAX = 24,
+	BARRAGE_MULT = 0.55,
+	BARRAGE_SPEED = 55,
+	BARRAGE_STYLES = { "Fireball", "Lightning", "Poison", "Bolt", "Spirit" },
+	CDR_MAX = 0.6,
+	CDR_FLOOR = 0.75, -- seconds
+}
 
 -- Ascension Shop node ids (Section 23)
 local NODE_MIGHT = "AS_T1_01"
@@ -267,6 +344,11 @@ local numberQueue: { [number]: { { [string]: any } } } = {}
 local lastRemoteAt: { [Player]: { [string]: number } } = {}
 local nextProjectileId = 1
 local nextOfferId = 1
+local cardRuntime = {
+	Novas = {} :: { Nova }, -- Chain Reaction queue, oldest first
+	NovaGen = nil :: number?, -- generation of the nova that is striking right now
+	ProjCount = {} :: { [number]: number? }, -- run id -> live player projectiles
+}
 
 local fxRemote: RemoteEvent
 local numberRemote: RemoteEvent
@@ -315,6 +397,10 @@ local function queueNumber(runId: number, entry: { [string]: any })
 	if not list then
 		list = {}
 		numberQueue[runId] = list
+	end
+	local plain = entry.Kind == "Hit" or entry.Kind == "Dot" or entry.Kind == "Chain"
+	if #list >= CARD.NUMBER_CAP and plain and not entry.Crit and not entry.Kill then
+		return
 	end
 	table.insert(list, entry)
 end
@@ -413,6 +499,14 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 		FrostReadyAt = 0,
 		FangReadyAt = 0,
 		OrbitAt = 0,
+		MeteorAt = 0,
+		BarrageAt = 0,
+		PinataAt = 0,
+		PinataDust = 0,
+		PinataFlushAt = 0,
+		PinataRoom = 0,
+		PinataDepth = 0,
+		ShardAt = 0,
 		Stacks = {},
 		Mods = {},
 		Banished = {},
@@ -424,6 +518,8 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 	}
 	player:SetAttribute("Combo", 0)
 	player:SetAttribute("Shield", nil)
+	player:SetAttribute("SizeScale", nil) -- Gigantism (client swing prediction + projectile visuals)
+	player:SetAttribute("RunBlades", nil) -- Whirling Blades count (client draws the orbit)
 	return pc
 end
 
@@ -523,6 +619,9 @@ local function makeAttackCtx(player: Player): AttackCtx?
 		BossBonus = linkBonus(profile, "BossDamage"),
 		ForceCrit = false,
 		Relics = relics,
+		Size = math.min(CARD.SIZE_MAX, 1 + (mods.SizeMult or 0)),
+		SkillScale = 1,
+		Phantom = false,
 	}
 end
 
@@ -567,7 +666,7 @@ end
 
 local function rollDamage(ctx: AttackCtx, skillMult: number, targetBonus: number, critRate: number): (number, boolean, { number })
 	local params = ctx.Params
-	params.SkillMultiplier = skillMult
+	params.SkillMultiplier = skillMult * ctx.SkillScale
 	params.TargetBonus = targetBonus
 	params.CritRate = critRate
 	params.ComboCount = ctx.PC.Combo
@@ -756,6 +855,25 @@ strikeEnemy = function(ctx: AttackCtx, enemy: EnemyState, skillMult: number, fla
 		end
 	end
 
+	-- Golden Piñata: crits can burst into Rift Dust (capped per room; paid out in batches by tickPlayers).
+	local pinata = ctx.Mods.PinataChance or 0
+	if crit and pinata > 0 then
+		local pc = ctx.PC
+		local now = os.clock()
+		local run = RunManagerService.GetRunById(ctx.RunId)
+		if run and pc.PinataDepth ~= run.Depth then
+			pc.PinataDepth = run.Depth
+			pc.PinataRoom = 0
+		end
+		if run and now >= pc.PinataAt and pc.PinataRoom < CARD.PINATA_PER_ROOM and rng:NextNumber() < math.min(CARD.PINATA_MAX, pinata) then
+			pc.PinataAt = now + CARD.PINATA_COOLDOWN
+			pc.PinataRoom += 1
+			local dust = math.round((2 + 0.5 * run.Depth) * FormulaEngine.GetRebirthInfo(ctx.Profile.RebirthTier).EcoMult)
+			pc.PinataDust += dust
+			fx(ctx.RunId, { Kind = "Pinata", Pos = enemy.Feet + Vector3.new(0, enemy.Half.Y, 0), Amount = dust, Owner = ctx.Player.UserId })
+		end
+	end
+
 	if not enemy.Dead and flags and flags.Stagger and enemy.Kind ~= "Boss" then
 		EnemyAIService.Stun(enemy, flags.Stagger)
 		EnemyAIService.Launch(enemy, flags.Launch or STAGGER_HOP)
@@ -807,7 +925,20 @@ killEnemy = function(enemy: EnemyState, killer: Player?)
 		end
 	end
 
-	RunManagerService.ReportEnemyDefeated(enemy.Model, killer or (if burn then burn.Source else nil))
+	-- Chain Reaction: queue a nova on the corpse (tickNovas detonates it a beat later).
+	local owner = killer or (if burn then burn.Source else nil)
+	local ownerPc = if owner then combat[owner] else nil
+	if owner and ownerPc and (ownerPc.Mods.ChainReaction or 0) > 0 then
+		local gen = (cardRuntime.NovaGen or -1) + 1
+		if gen < CARD.NOVA_GENERATIONS and #cardRuntime.Novas < CARD.NOVA_QUEUE then
+			table.insert(cardRuntime.Novas, {
+				Player = owner, RunId = enemy.RunId, X = enemy.Feet.X, Y = enemy.Feet.Y + enemy.Half.Y, Gen = gen,
+				At = os.clock() + CARD.NOVA_DELAY,
+			})
+		end
+	end
+
+	RunManagerService.ReportEnemyDefeated(enemy.Model, owner)
 end
 
 -- Player damage -----------------------------------------------------------------------------------------------
@@ -928,13 +1059,22 @@ end
 
 local PIERCING_ENEMY_STYLES: { [string]: boolean } = { Shockwave = true }
 
-local function newProjectile(fields: { [string]: any }): Projectile
+-- Returns nil when the run already has CARD.PROJECTILE_CAP live player projectiles.
+local function newProjectile(fields: { [string]: any }): Projectile?
+	local team = fields.Team or "Player"
+	if team == "Player" then
+		local live = cardRuntime.ProjCount[fields.RunId] or 0
+		if live >= CARD.PROJECTILE_CAP then
+			return nil
+		end
+		cardRuntime.ProjCount[fields.RunId] = live + 1
+	end
 	local id = nextProjectileId
 	nextProjectileId += 1
 	local pos = fields.Pos :: Vector3
 	local projectile: Projectile = {
 		Id = id,
-		Team = fields.Team or "Player",
+		Team = team,
 		RunId = fields.RunId,
 		Pos = pos,
 		StartPos = pos,
@@ -958,6 +1098,8 @@ local function newProjectile(fields: { [string]: any }): Projectile
 		Reflected = false,
 		Bounces = fields.Bounces or 0,
 		Focus = fields.Focus == true,
+		Detonate = fields.Detonate == true,
+		Counted = team == "Player",
 		Hit = {},
 	}
 	projectiles[id] = projectile
@@ -965,6 +1107,7 @@ local function newProjectile(fields: { [string]: any }): Projectile
 		Kind = "Proj", Id = id, Style = projectile.Style, Pos = pos, Vel = projectile.Vel,
 		Life = fields.Life, HalfX = projectile.HalfX, HalfY = projectile.HalfY,
 		Owner = if projectile.Owner then projectile.Owner.UserId else 0,
+		Scale = fields.Scale, -- Gigantism: the client grows its fixed-size projectile shapes
 	})
 	return projectile
 end
@@ -1016,6 +1159,10 @@ local function endProjectile(projectile: Projectile, hit: boolean)
 		return
 	end
 	projectiles[projectile.Id] = nil
+	if projectile.Counted then
+		local left = (cardRuntime.ProjCount[projectile.RunId] or 1) - 1
+		cardRuntime.ProjCount[projectile.RunId] = if left > 0 then left else nil
+	end
 	fx(projectile.RunId, { Kind = "ProjEnd", Id = projectile.Id, Pos = projectile.Pos, Hit = hit })
 
 	if projectile.Trail and projectile.Owner and combat[projectile.Owner] then
@@ -1114,7 +1261,11 @@ local function stepProjectile(projectile: Projectile, dt: number, now: number): 
 		return true
 	end
 	if now >= projectile.ExpiresAt then
-		endProjectile(projectile, false)
+		local ctx = if projectile.Detonate and projectile.Owner then makeAttackCtx(projectile.Owner) else nil
+		if ctx then
+			explodeProjectile(projectile, ctx) -- a meteor that reached its landing spot without touching anyone
+		end
+		endProjectile(projectile, ctx ~= nil)
 		return true
 	end
 
@@ -1251,6 +1402,11 @@ local function tickPlayers(dt: number, now: number)
 			pc.Shield = 0
 			player:SetAttribute("Shield", nil)
 		end
+		if pc.PinataDust > 0 and now >= pc.PinataFlushAt then
+			pc.PinataFlushAt = now + CARD.PINATA_FLUSH
+			RunManagerService.AddUnsecured(player, { Dust = pc.PinataDust, BossCores = 0, RelicShards = 0 })
+			pc.PinataDust = 0
+		end
 		local profile = PlayerDataService.Get(player)
 		if profile then
 			local mobility = Physics25D.GetMobility(profile.AscensionNodes[Physics25D.SKYWALKER_NODE_ID] or 0)
@@ -1271,11 +1427,12 @@ end
 
 local function doMeleeAttack(ctx: AttackCtx, profile: AttackProfile, facing: number, root: BasePart)
 	local rx, ry = root.Position.X, root.Position.Y
-	local reach = profile.Range * (1 + (ctx.Mods.RangeMult or 0))
+	local reach = profile.Range * (1 + (ctx.Mods.RangeMult or 0)) * ctx.Size
+	local height = profile.Height * ctx.Size
 	local mult = profile.Mult
 	local style = profile.Style
-	-- Gauntlets: every third punch of the chain is a heavier, longer finisher.
-	if profile.ComboFinisher then
+	-- Gauntlets: every third punch of the chain is a heavier, longer finisher (Afterimage phantoms don't count).
+	if profile.ComboFinisher and not ctx.Phantom then
 		ctx.PC.SwingCount += 1
 		if ctx.PC.SwingCount % 3 == 0 then
 			mult *= profile.ComboFinisher
@@ -1288,10 +1445,11 @@ local function doMeleeAttack(ctx: AttackCtx, profile: AttackProfile, facing: num
 	local maxX = if facing > 0 then rx + reach else rx + back
 	local cx, hx = (minX + maxX) / 2, (maxX - minX) / 2
 
+	-- The owner predicts their own swing locally, but not an Afterimage phantom's.
 	fx(ctx.RunId, {
 		Kind = "Swing", Owner = ctx.Player.UserId, Weapon = ctx.Weapon.Id, Style = style,
-		Pos = Vector3.new(rx, ry, 0), Facing = facing, Range = reach, Height = profile.Height,
-	}, ctx.Player)
+		Pos = Vector3.new(rx, ry, 0), Facing = facing, Range = reach, Height = height,
+	}, if ctx.Phantom then nil else ctx.Player)
 	if style == "Finisher" then
 		fx(ctx.RunId, { Kind = "Burst", Pos = Vector3.new(rx + facing * reach * 0.7, ry, 0), Radius = 3.5, Style = "Finisher",
 			Owner = ctx.Player.UserId })
@@ -1303,7 +1461,7 @@ local function doMeleeAttack(ctx: AttackCtx, profile: AttackProfile, facing: num
 	local hits: { EnemyState } = {}
 	for _, enemy in livingEnemies(ctx.RunId) do
 		local ex, ey, ehx, ehy = EnemyAIService.Box(enemy)
-		if EnemyAIService.Overlap(cx, ry, hx, profile.Height, ex, ey, ehx, ehy) then
+		if EnemyAIService.Overlap(cx, ry, hx, height, ex, ey, ehx, ehy) then
 			table.insert(hits, enemy)
 		end
 	end
@@ -1317,32 +1475,65 @@ local function doMeleeAttack(ctx: AttackCtx, profile: AttackProfile, facing: num
 		strikeEnemy(ctx, hits[index], mult, flags)
 		struck += 1
 	end
-	if struck > 0 and profile.Stagger then
+	if struck > 0 and profile.Stagger and not ctx.Phantom then
 		-- Hammer passive (Seismic Impact): a slam that connects raises a 5% Max HP shield.
 		grantShield(ctx.PC, maxHealthOf(ctx.Player) * SLAM_SHIELD_FRACTION, SLAM_SHIELD_SECONDS)
 		fx(ctx.RunId, { Kind = "Shake", Intensity = 0.35, Duration = 0.15 })
 	end
-	if ctx.Weapon.Id == "SummoningBell" and hits[1] then
+	if ctx.Weapon.Id == "SummoningBell" and hits[1] and not ctx.Phantom then
 		ctx.PC.BellFocus = hits[1] -- the bell's pulse tells the spirits who to chase
 	end
 
 	-- Smack back any boulders inside the swing.
 	for _, projectile in projectiles do
 		if projectile.Team == "Enemy" and projectile.Reflectable and projectile.RunId == ctx.RunId
-			and EnemyAIService.Overlap(cx, ry, hx, profile.Height, projectile.Pos.X, projectile.Pos.Y, projectile.HalfX, projectile.HalfY) then
+			and EnemyAIService.Overlap(cx, ry, hx, height, projectile.Pos.X, projectile.Pos.Y, projectile.HalfX, projectile.HalfY) then
 			reflectProjectile(projectile, ctx.Player)
 		end
 	end
 
 	-- Greatsword passive: Berserker's Momentum
-	if ctx.Weapon.Id == "Greatsword" and struck >= 3 then
+	if ctx.Weapon.Id == "Greatsword" and struck >= 3 and not ctx.Phantom then
 		ctx.PC.MomentumUntil = os.clock() + MOMENTUM_SECONDS
+	end
+
+	-- Ricochet Frenzy: a connecting swing flings a blade shard from the first victim at the nearest other enemy.
+	local ricochet = ctx.Mods.Ricochet or 0
+	if struck > 0 and ricochet > 0 and os.clock() >= ctx.PC.ShardAt then
+		local from = hits[1]
+		local fromX, fromY = from.Feet.X, from.Feet.Y + from.Half.Y
+		local struckSet: { [EnemyState]: boolean } = {}
+		for index = 1, struck do
+			struckSet[hits[index]] = true
+		end
+		local best: EnemyState? = nil
+		local bestDistance = CARD.SHARD_RANGE
+		for _, other in enemiesInRadius(ctx.RunId, fromX, fromY, CARD.SHARD_RANGE, from) do
+			local distance = (Vector2.new(other.Feet.X, other.Feet.Y + other.Half.Y) - Vector2.new(fromX, fromY)).Magnitude
+			if not struckSet[other] and distance <= bestDistance then
+				best, bestDistance = other, distance
+			end
+		end
+		if best then
+			ctx.PC.ShardAt = os.clock() + CARD.SHARD_COOLDOWN
+			local aim = Vector3.new(best.Feet.X - fromX, best.Feet.Y + best.Half.Y - fromY, 0)
+			local shard = newProjectile({
+				Team = "Player", RunId = ctx.RunId, Pos = Vector3.new(fromX, fromY, 0),
+				Vel = (if aim.Magnitude > 0.01 then aim.Unit else Vector3.xAxis * facing) * CARD.SHARD_SPEED,
+				HalfX = 0.9 * ctx.Size, HalfY = 0.9 * ctx.Size, Life = math.min(0.6, bestDistance / CARD.SHARD_SPEED + 0.2),
+				Style = "Blade", Owner = ctx.Player, SkillMult = CARD.SHARD_MULT * ctx.SkillScale, Bounces = ricochet,
+				Scale = ctx.Size,
+			})
+			if shard then
+				shard.Hit = struckSet
+			end
+		end
 	end
 end
 
 local function doProjectileAttack(ctx: AttackCtx, profile: AttackProfile, facing: number, root: BasePart)
 	local speed = profile.Speed or 70
-	local half = profile.HalfSize or 1.4
+	local half = (profile.HalfSize or 1.4) * ctx.Size
 	newProjectile({
 		Team = "Player",
 		RunId = ctx.RunId,
@@ -1353,13 +1544,14 @@ local function doProjectileAttack(ctx: AttackCtx, profile: AttackProfile, facing
 		Life = profile.Range / speed,
 		Style = profile.Style,
 		Owner = ctx.Player,
-		SkillMult = profile.Mult,
+		SkillMult = profile.Mult * ctx.SkillScale,
 		CanReflect = true,
 		ForceCrit = ctx.ForceCrit,
 		Shock = ctx.Weapon.Id == "Staff", -- the Staff's arcane bolts Shock; its Fireball Burns
 		Pierce = profile.Pierce == true,
-		Bounces = profile.Bounces,
+		Bounces = (profile.Bounces or 0) + (ctx.Mods.Ricochet or 0),
 		Focus = ctx.Weapon.Id == "Bow",
+		Scale = ctx.Size,
 	})
 end
 
@@ -1424,9 +1616,11 @@ local function castRain(ctx: AttackCtx, ability: AbilityProfile, facing: number,
 			centerX, centerY = enemy.Feet.X, enemy.Feet.Y + enemy.Half.Y
 		end
 	end
-	local width = ability.RainWidth or 12
+	local size = ctx.Size
+	local width = (ability.RainWidth or 12) * size
 	local height = ability.RainHeight or 22
 	local count = ability.Count + (ctx.Mods.AbilityCasts or 0) * 2
+	local skillMult = ability.Mult * ctx.SkillScale
 	fx(ctx.RunId, { Kind = "Telegraph", Pos = Vector3.new(centerX, centerY - 1, 0), Size = Vector3.new(width, 0.6, 6),
 		Duration = 0.35, Style = "Arrow" })
 	local runId = ctx.RunId
@@ -1438,9 +1632,9 @@ local function castRain(ctx: AttackCtx, ability: AbilityProfile, facing: number,
 			local x = centerX + (rng:NextNumber() - 0.5) * width
 			newProjectile({
 				Team = "Player", RunId = runId, Pos = Vector3.new(x, centerY + height, 0),
-				Vel = Vector3.new(0, -ability.Speed, 0), HalfX = ability.HalfX, HalfY = ability.HalfY,
+				Vel = Vector3.new(0, -ability.Speed, 0), HalfX = ability.HalfX * size, HalfY = ability.HalfY * size,
 				Life = (height + 6) / ability.Speed, Style = ability.Style, Owner = ctx.Player,
-				SkillMult = ability.Mult, ForceCrit = ctx.ForceCrit,
+				SkillMult = skillMult, ForceCrit = ctx.ForceCrit, Scale = size,
 			})
 		end)
 	end
@@ -1450,10 +1644,10 @@ end
 local function castPillars(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart)
 	local rx = root.Position.X
 	local feetY = root.Position.Y - EnemyAIService.PLAYER_FEET_OFFSET
-	local halfX, halfY = ability.PillarHalfX or 2.6, ability.PillarHalfY or 5
-	local spacing = ability.Spacing or 5.5
+	local halfX, halfY = (ability.PillarHalfX or 2.6) * ctx.Size, (ability.PillarHalfY or 5) * ctx.Size
+	local spacing = (ability.Spacing or 5.5) * ctx.Size
 	local count = ability.Count + (ctx.Mods.AbilityCasts or 0)
-	local player, runId = ctx.Player, ctx.RunId
+	local player, runId, skillScale = ctx.Player, ctx.RunId, ctx.SkillScale
 	fx(runId, { Kind = "Shake", Intensity = 0.7, Duration = 0.3 })
 	for index = 1, count do
 		task.delay((index - 1) * 0.12, function()
@@ -1461,6 +1655,7 @@ local function castPillars(ctx: AttackCtx, ability: AbilityProfile, facing: numb
 			if not live or live.RunId ~= runId then
 				return
 			end
+			live.SkillScale = skillScale
 			local x = rx + facing * (2 + spacing * index - spacing / 2)
 			fx(runId, { Kind = "Pillar", Pos = Vector3.new(x, feetY, 0), HalfX = halfX, Height = halfY * 2, Owner = player.UserId })
 			local struck = false
@@ -1476,16 +1671,18 @@ local function castPillars(ctx: AttackCtx, ability: AbilityProfile, facing: numb
 end
 
 -- Gauntlets: Rising Uppercut. Hits a tall box ahead, launches enemies and throws the caster skyward.
-local function castUppercut(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart)
+local function castUppercut(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart, echo: boolean)
 	local rx = root.Position.X
 	local feetY = root.Position.Y - EnemyAIService.PLAYER_FEET_OFFSET
-	local range, height = ability.Range or 6.5, ability.Height or 9
+	local range, height = (ability.Range or 6.5) * ctx.Size, (ability.Height or 9) * ctx.Size
 	local minX = if facing > 0 then rx - 1 else rx - range
 	local maxX = if facing > 0 then rx + range else rx + 1
 	local cx, hx = (minX + maxX) / 2, (maxX - minX) / 2
 	fx(ctx.RunId, { Kind = "Burst", Pos = Vector3.new(cx, feetY + height / 2, 0), Radius = height / 2 + 1, Style = "Dragon",
 		Owner = ctx.Player.UserId })
-	fxRemote:FireClient(ctx.Player, { Kind = "SelfLaunch", Speed = SELF_UPPERCUT_SPEED })
+	if not echo then
+		fxRemote:FireClient(ctx.Player, { Kind = "SelfLaunch", Speed = SELF_UPPERCUT_SPEED })
+	end
 	for _, victim in enemiesInBox(ctx.RunId, cx, feetY + height / 2, hx, height / 2) do
 		strikeEnemy(ctx, victim, ability.Mult, { NativeBurn = ability.Burn, Stagger = 0.9, Launch = UPPERCUT_HOP })
 	end
@@ -1505,7 +1702,9 @@ end
 local function castSummon(ctx: AttackCtx, ability: AbilityProfile)
 	removeSummons(ctx.Player)
 	local now = os.clock()
-	local count = math.min(#SUMMON_OFFSETS, ability.Count + (ctx.Mods.AbilityCasts or 0))
+	local base = ability.Count + (ctx.Mods.AbilityCasts or 0)
+	-- Echo Chamber doubles the pack instead of recasting it.
+	local count = if (ctx.Mods.EchoCast or 0) > 0 then math.min(CARD.ECHO_SUMMON_CAP, base * 2) else math.min(CARD.SUMMON_CAP, base)
 	local duration = ability.Duration or 12
 	for slot = 1, count do
 		local summon: Summon = {
@@ -1561,14 +1760,16 @@ local function tickSummons(now: number)
 			local distance = math.max(1, aim.Magnitude)
 			newProjectile({
 				Team = "Player", RunId = summon.RunId, Pos = Vector3.new(origin.X, origin.Y, 0), Vel = aim.Unit * ability.Speed,
-				HalfX = ability.HalfX, HalfY = ability.HalfY, Life = math.min(1.2, distance / ability.Speed + 0.2),
-				Style = ability.Style, Owner = summon.Owner, SkillMult = ability.Mult,
+				HalfX = ability.HalfX * ctx.Size, HalfY = ability.HalfY * ctx.Size, Life = math.min(1.2, distance / ability.Speed + 0.2),
+				Style = ability.Style, Owner = summon.Owner, SkillMult = ability.Mult, Bounces = ctx.Mods.Ricochet or 0,
+				Scale = ctx.Size,
 			})
 		end
 	end
 end
 
--- Hungry Coin: two coins orbit the player and chew through anything they touch.
+-- Hungry Coin: two coins orbit the player and chew through anything they touch. Whirling Blades: the same, with
+-- up to 6 spectral blades (the client draws them from the RunBlades attribute).
 local function tickOrbits(now: number)
 	for player, pc in combat do
 		if now < pc.OrbitAt then
@@ -1576,17 +1777,27 @@ local function tickOrbits(now: number)
 		end
 		pc.OrbitAt = now + ORBIT_TICK
 		local coin = RelicService.GetActive(player).REL_04
+		local blades = math.min(CARD.BLADES_MAX, pc.Mods.OrbitBlades or 0)
 		local root = getRoot(player)
-		if not coin or not root or not isRunAlive(player, pc.RunId) then
+		if (not coin and blades <= 0) or not root or not isRunAlive(player, pc.RunId) then
 			continue
 		end
-		local value = RelicConfig.Value("REL_04", coin)
 		local ctx = makeAttackCtx(player)
 		if not ctx then
 			continue
 		end
-		for _, victim in enemiesInRadius(pc.RunId, root.Position.X, root.Position.Y, value.OrbitRadius, nil) do
-			strikeEnemy(ctx, victim, value.OrbitDps * ORBIT_TICK, { NoChain = true, NoStatus = true })
+		local x, y = root.Position.X, root.Position.Y
+		if coin then
+			local value = RelicConfig.Value("REL_04", coin)
+			for _, victim in enemiesInRadius(pc.RunId, x, y, value.OrbitRadius, nil) do
+				strikeEnemy(ctx, victim, value.OrbitDps * ORBIT_TICK, { NoChain = true, NoStatus = true })
+			end
+		end
+		if blades > 0 then
+			local victims = enemiesInRadius(pc.RunId, x, y, CARD.BLADE_RADIUS * ctx.Size, nil)
+			for index = 1, math.min(CARD.BLADE_VICTIMS, #victims) do
+				strikeEnemy(ctx, victims[index], CARD.BLADE_MULT * blades * ORBIT_TICK, { NoChain = true, NoStatus = true })
+			end
 		end
 	end
 end
@@ -1620,8 +1831,11 @@ local function thunderBoots(player: Player, pc: PlayerCombat, root: BasePart)
 	end
 end
 
-local function castAbility(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart)
-	hourglassPulse(ctx, root)
+-- `echo` = an Echo Chamber recast: no Volatile Hourglass pulse, Loaded Deck draw or self-launch.
+local function castAbility(ctx: AttackCtx, ability: AbilityProfile, facing: number, root: BasePart, echo: boolean)
+	if not echo then
+		hourglassPulse(ctx, root)
+	end
 	local kind = ability.Kind or "Projectile"
 	if kind == "Rain" then
 		castRain(ctx, ability, facing, root)
@@ -1630,19 +1844,20 @@ local function castAbility(ctx: AttackCtx, ability: AbilityProfile, facing: numb
 		castPillars(ctx, ability, facing, root)
 		return
 	elseif kind == "Uppercut" then
-		castUppercut(ctx, ability, facing, root)
+		castUppercut(ctx, ability, facing, root, echo)
 		return
 	elseif kind == "Summon" then
 		castSummon(ctx, ability)
 		return
 	end
-	if ability.DrawCard then
+	if ability.DrawCard and not echo then
 		drawCard(ctx, root)
 	end
 	local extra = ctx.Mods.AbilityCasts or 0
 	local count = ability.Count + extra
-	local perMult = ability.Mult * (if ability.Count == 1 and extra > 0 then ABILITY_MULTI_CAST_MULT else 1)
+	local perMult = ability.Mult * ctx.SkillScale * (if ability.Count == 1 and extra > 0 then ABILITY_MULTI_CAST_MULT else 1)
 	local origin = root.Position + Vector3.new(facing * 2, 0.5, 0)
+	local size = ctx.Size
 
 	for index = 1, count do
 		local angle = math.rad((index - (count + 1) / 2) * ability.FanDeg)
@@ -1652,19 +1867,20 @@ local function castAbility(ctx: AttackCtx, ability: AbilityProfile, facing: numb
 			RunId = ctx.RunId,
 			Pos = origin,
 			Vel = velocity,
-			HalfX = ability.HalfX,
-			HalfY = ability.HalfY,
+			HalfX = ability.HalfX * size,
+			HalfY = ability.HalfY * size,
 			Life = ability.Life,
 			Style = ability.Style,
 			Owner = ctx.Player,
 			SkillMult = perMult,
 			Pierce = ability.Pierce,
-			ExplodeRadius = ability.ExplodeRadius,
+			ExplodeRadius = if ability.ExplodeRadius then ability.ExplodeRadius * size else nil,
 			Burn = ability.Burn == true,
 			Shock = ability.Shock == true,
 			Trail = (ctx.Mods.AbilityTrail or 0) > 0,
 			ForceCrit = ctx.ForceCrit,
-			Bounces = if ctx.Weapon.Id == "TrickCards" then 1 else 0,
+			Bounces = (if ctx.Weapon.Id == "TrickCards" then 1 else 0) + (ctx.Mods.Ricochet or 0),
+			Scale = size,
 		})
 	end
 end
@@ -1718,6 +1934,24 @@ local function onAttack(player: Player, slot: any, facingInput: any)
 			end
 		end
 		publishAttackInterval(ctx)
+		-- Afterimage: a phantom repeats the attack a beat later at half strength.
+		if (ctx.Mods.Afterimage or 0) > 0 then
+			local runId = ctx.RunId
+			task.delay(CARD.AFTERIMAGE_DELAY, function()
+				local live = makeAttackCtx(player)
+				local liveRoot = getRoot(player)
+				if not live or live.RunId ~= runId or not liveRoot then
+					return
+				end
+				live.SkillScale = CARD.AFTERIMAGE_MULT
+				live.Phantom = true
+				if profile.Kind == "Projectile" then
+					doProjectileAttack(live, profile, facing, liveRoot)
+				else
+					doMeleeAttack(live, profile, facing, liveRoot)
+				end
+			end)
+		end
 	else
 		local ability = ctx.Weapon.Ability
 		if not ability or now < pc.NextAbilityAt - ABILITY_LATENCY_CREDIT then
@@ -1728,11 +1962,108 @@ local function onAttack(player: Player, slot: any, facingInput: any)
 		if hourglass then
 			cooldown *= 1 - RelicConfig.Value("REL_08", hourglass).Cdr
 		end
+		cooldown = math.max(CARD.CDR_FLOOR, cooldown * (1 - math.min(CARD.CDR_MAX, ctx.Mods.AbilityCdr or 0))) -- Rift Overdrive
 		pc.NextAbilityAt = now + cooldown
 		player:SetAttribute("Ability1Cooldown", cooldown)
 		player:SetAttribute("Ability1ReadyAt", Workspace:GetServerTimeNow() + cooldown)
 		consumeShadowStep(ctx)
-		castAbility(ctx, ability, facing, root)
+		castAbility(ctx, ability, facing, root, false)
+		-- Echo Chamber: the ability recasts (summons were doubled in castSummon instead).
+		if (ctx.Mods.EchoCast or 0) > 0 and ability.Kind ~= "Summon" then
+			local runId = ctx.RunId
+			task.delay(CARD.ECHO_DELAY, function()
+				local live = makeAttackCtx(player)
+				local liveRoot = getRoot(player)
+				if not live or live.RunId ~= runId or not liveRoot then
+					return
+				end
+				live.SkillScale = CARD.ECHO_MULT
+				castAbility(live, ability, facing, liveRoot, true)
+			end)
+		end
+	end
+end
+
+-- Chain Reaction: detonates queued novas (a few per step so a chain ripples across a pack instead of one frame).
+local function tickNovas(now: number)
+	local queue = cardRuntime.Novas
+	cardRuntime.NovaGen = nil
+	local blasts = 0
+	while queue[1] and queue[1].At <= now and blasts < CARD.NOVA_PER_STEP do
+		local nova = table.remove(queue, 1) :: Nova
+		blasts += 1
+		local ctx = makeAttackCtx(nova.Player)
+		if ctx and ctx.RunId == nova.RunId then
+			local radius = CARD.NOVA_RADIUS * ctx.Size
+			fx(nova.RunId, { Kind = "Burst", Pos = Vector3.new(nova.X, nova.Y, 0), Radius = radius, Style = "Nova",
+				Owner = nova.Player.UserId })
+			local victims = enemiesInRadius(nova.RunId, nova.X, nova.Y, radius, nil)
+			cardRuntime.NovaGen = nova.Gen -- kills from these strikes queue the next generation
+			for index = 1, math.min(CARD.NOVA_VICTIMS, #victims) do
+				strikeEnemy(ctx, victims[index], CARD.NOVA_MULT * CARD.NOVA_FALLOFF ^ nova.Gen, { NoChain = true, NoStatus = true })
+			end
+			cardRuntime.NovaGen = nil
+		end
+	end
+end
+
+-- Meteor Shower and Prismatic Barrage: timed volleys that only start while an enemy is in range.
+local function tickPeriodics(now: number)
+	for player, pc in combat do
+		local meteors = pc.Mods.MeteorShower or 0
+		local bolts = math.min(CARD.BARRAGE_MAX, pc.Mods.BarrageBolts or 0)
+		if meteors <= 0 and bolts <= 0 then
+			continue
+		end
+		local root = getRoot(player)
+		if not root or not isRunAlive(player, pc.RunId) then
+			continue
+		end
+		local x, y = root.Position.X, root.Position.Y
+		local runId = pc.RunId
+
+		if meteors > 0 and now >= pc.MeteorAt then
+			local targets = enemiesInRadius(runId, x, y, CARD.METEOR_RANGE, nil)
+			local ctx = if #targets > 0 then makeAttackCtx(player) else nil
+			if ctx then
+				pc.MeteorAt = now + CARD.METEOR_EVERY
+				local size = ctx.Size
+				for index = 1, math.min(CARD.METEOR_COUNT, #targets) do
+					local pick = table.remove(targets, rng:NextInteger(1, #targets)) :: EnemyState
+					local landing = Vector3.new(pick.Feet.X, pick.Feet.Y + pick.Half.Y, 0)
+					task.delay((index - 1) * 0.15, function()
+						if not RunManagerService.GetRunById(runId) then
+							return
+						end
+						local start = landing + Vector3.new(rng:NextNumber(-6, 6), CARD.METEOR_HEIGHT, 0)
+						local path = landing - start
+						newProjectile({
+							Team = "Player", RunId = runId, Pos = start, Vel = path.Unit * CARD.METEOR_SPEED,
+							HalfX = 1.6 * size, HalfY = 1.6 * size, Life = path.Magnitude / CARD.METEOR_SPEED,
+							Style = "Fireball", Owner = player, SkillMult = CARD.METEOR_MULT, Burn = true,
+							ExplodeRadius = CARD.METEOR_RADIUS * size, Detonate = true, Scale = size,
+						})
+					end)
+				end
+			end
+		end
+
+		if bolts > 0 and now >= pc.BarrageAt and #enemiesInRadius(runId, x, y, CARD.BARRAGE_RANGE, nil) > 0 then
+			pc.BarrageAt = now + CARD.BARRAGE_EVERY
+			local size = math.min(CARD.SIZE_MAX, 1 + (pc.Mods.SizeMult or 0))
+			local origin = Vector3.new(x, y + 0.5, 0)
+			local styles = CARD.BARRAGE_STYLES
+			for index = 1, bolts do
+				local angle = (index / bolts) * math.pi * 2
+				newProjectile({
+					Team = "Player", RunId = runId, Pos = origin,
+					Vel = Vector3.new(math.cos(angle), math.sin(angle), 0) * CARD.BARRAGE_SPEED,
+					HalfX = 0.9 * size, HalfY = 0.9 * size, Life = CARD.BARRAGE_RANGE / CARD.BARRAGE_SPEED,
+					Style = styles[(index - 1) % #styles + 1], Owner = player, SkillMult = CARD.BARRAGE_MULT, Pierce = true,
+					Scale = size,
+				})
+			end
+		end
 	end
 end
 
@@ -1875,6 +2206,10 @@ local function applyUpgrade(pc: PlayerCombat, card: Upgrade)
 		local interval = 1 / (weapon.AttacksPerSecond * (1 + (pc.Mods.AttackSpeed or 0)))
 		pc.Player:SetAttribute("AttackInterval", interval)
 	end
+	local size = math.min(CARD.SIZE_MAX, 1 + (pc.Mods.SizeMult or 0))
+	pc.Player:SetAttribute("SizeScale", if size > 1 then size else nil)
+	local blades = math.min(CARD.BLADES_MAX, pc.Mods.OrbitBlades or 0)
+	pc.Player:SetAttribute("RunBlades", if blades > 0 then blades else nil)
 end
 
 local function onUpgradeChosen(player: Player, payload: any)
@@ -1982,6 +2317,17 @@ function CombatService.GetBuild(player: Player): { [string]: number }
 	return copy
 end
 
+-- Studio test hook (DevCommandsService "GiveUpgrade"): adds one stack of a card to the player's live run.
+function CombatService.GiveUpgrade(player: Player, id: string): boolean
+	local pc = getPlayerCombat(player)
+	local card = UpgradePoolConfig.Get(id)
+	if not pc or not card then
+		return false
+	end
+	applyUpgrade(pc, card)
+	return true
+end
+
 CombatService.DamagePlayer = damagePlayer
 CombatService.DamageHazard = damageHazard
 
@@ -2055,12 +2401,14 @@ function CombatService.Init()
 			end
 			tickPlayers(step, now)
 			tickSummons(now)
+			tickNovas(now)
 			statusClock += step
 			if statusClock >= 0.1 then
 				statusClock = 0
 				tickStatuses(now)
 				tickZones(now)
 				tickOrbits(now)
+				tickPeriodics(now)
 			end
 			numberClock += step
 			if numberClock >= NUMBER_FLUSH_SECONDS then
