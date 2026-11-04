@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./luau-lsp analyze *)",
+      "mcp__Roblox_Studio__screen_capture",
+      "mcp__Roblox_Studio__script_read",
+      "mcp__Roblox_Studio__get_console_output",
+      "mcp__Roblox_Studio__list_roblox_studios",
+      "mcp__Roblox_Studio__get_studio_state",
+      "mcp__Roblox_Studio__search_game_tree"
+    ]
+  }
+}

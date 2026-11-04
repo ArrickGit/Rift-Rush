@@ -1,15 +1,15 @@
 *Note: the links and images in this document may point to external sources. Please review them before opening.*
 
-# CLAUDE.md — Rift Rush Master Game Design & Implementation Spec (v3.1)
+# CLAUDE.md — Rift Rush Master Game Design & Implementation Spec (v3.2)
 
-> **Status:** Single-Player Feature Complete (`main` @ `af46038`) — Pre-Launch Polish, Balance, Audio & UI Fix Roadmap (v3.1)
-> **In Progress (2026-10-30):** Game-like UI redesign on branch `game-like-ui` (not merged yet) — see **Section 5 (Live Development Log)** for what's done, known bugs, and what's left.
+> **Status:** Single-Player Feature Complete (`main` @ `af46038`) + Scene UI Redesign (`game-like-ui`) + Viral Growth & Sub-Agent Architecture (v3.2)
+> **In Progress (2026-10-30):** Game-like UI redesign on branch `game-like-ui` (all 8 station scenes, Settings & Credits, and HUD glitch fixes complete) — see **Section 5 (Live Development Log)** and **Section 6 (Viral Mechanics & Sub-Agent Workflow)**.
 > **Platform:** Roblox (PC, Mobile, Console)
-> **Genre:** 2.5D PvE Action Roguelite with Endless Permanent Progression & Rebirths
+> **Genre:** 2.5D PvE Action Roguelite with Endless Permanent Progression, RNG Auras & Rebirths
 > **Working Title:** Rift Rush
 > **Repository:** [ArrickGit/Rift-Rush](https://github.com/ArrickGit/Rift-Rush)
-> **Codebase Snapshot:** 18 Server Services, 13 Client Controllers (incl. new `Sfx` + `StationScenes`), 16 Shared Modules
-> **Document Purpose:** Serve as the single source of truth (`CLAUDE.md` / `game.md`) for Claude Code to finish the remaining 4 unwired Ascension nodes, UI fixes, Bag redesign, audio system, balance pass, and pre-launch preparation.
+> **Codebase Snapshot:** 18 Server Services, 13 Client Controllers (incl. `Sfx` + `StationScenes`), 16 Shared Modules
+> **Document Purpose:** Serve as the single source of truth (`CLAUDE.md` / `game.md`) for Claude Code (and its research sub-agents) to finish the remaining 4 unwired Ascension nodes, audio hooks, balance pass, and viral retention mechanics.
 
 ---
 
@@ -18,338 +18,379 @@
 > **CRITICAL INSTRUCTIONS FOR CLAUDE CODE — READ BEFORE EVERY ACTION:**
 
 ### 0.1 Mandatory Coding & Architecture Standards
-1. **Strict Luau Typing:** Every `.luau` script MUST begin with `--!strict` and use explicit type annotations for function parameters, return types, and data structures.
-2. **Server Authority:** Never trust the client for damage calculations, currency payouts, Weapon Mastery XP, Rebirth eligibility, Ascension Shop purchases, environmental hazard damage, or room completion. Use `ReplicatedStorage.Shared.FormulaEngine` on the server as the single source of truth.
-3. **Preserve Working Systems (`af46038`):** All 8 weapons, 8 relics, 9 town stations, Star-Force upgrading, Weapon Mastery/Paragon, and DataStore profile locking are already built and verified in Studio playtesting. Do NOT rewrite or break working services when adding polish, fixing UI overlaps, or wiring the final 4 Ascension Shop nodes.
 
-### 0.2 Model Selection Guidelines (Default Sonnet vs. When to Recommend Opus)
-* **Default Model (Sonnet):** Default to **Sonnet** for standard development (wiring the 4 remaining Ascension nodes, fixing HUD/popup overlaps, redesigning the Bag UI, adding `AudioController` sound effects, and expanding World 1 rooms/cards).
-* **When to Recommend Switching to Opus:** Let the user know to switch to **Opus** only when performing the **Comprehensive Game-Wide Balance Pass (Step PL-4)**—which requires cross-referencing `FormulaEngine`, enemy DPS, weapon cooldowns, Star-Force costs, and curse trade-offs simultaneously—or when debugging complex cross-service edge cases.
+1. **Strict Luau Typing:** Every `.luau` script MUST begin with `--!strict` and use explicit type annotations for function parameters, return types, and data structures.
+
+2. **Server Authority:** Never trust the client for damage calculations, currency payouts, Weapon Mastery XP, Rebirth eligibility, Ascension Shop purchases, environmental hazard damage, or room completion. Use `ReplicatedStorage.Shared.FormulaEngine` on the server as the single source of truth.
+
+3. **Preserve Working Systems (`af46038` & `game-like-ui`):** All 8 weapons, 8 relics, 9 town stations, scene-based UI panels, Star-Force upgrading, Weapon Mastery/Paragon, and DataStore profile locking are already built and verified in Studio playtesting. Do NOT rewrite or break working services when adding polish, wiring the final 4 Ascension Shop nodes, or adding viral hooks.
+
+4. **Respect `UIController` 200-Local Limit:** `UIController.luau` is near Luau's 200 local-variable cap. Never add new local variables to `UIController.luau`; place new UI scenes or helpers in separate modules routed through `StationPanels` or `SceneKit`.
+
+### 0.2 Model Selection & Sub-Agent Guidelines
+
+* **Low-Tier Sub-Agents (`haiku` or `sonnet` via Task tool):** Use 1–2 lightweight sub-agents for **read-only codebase audits, viral mechanic design tables, upgrade card synergy brainstorming, and DPS spreadsheet math** (see **Section 7** for ready-to-run sub-agent prompts). Sub-agents must NEVER edit files directly—they return structured JSON/Markdown specs to the Main Agent.
+
+* **Main Agent Default (`sonnet`):** Use **Sonnet** as the main orchestrator to write and edit `.luau` files based on the sub-agents' findings.
+
+* **When to Switch Main Agent to `opus`:** Let the user know to switch to **Opus** only when performing the **Comprehensive Game-Wide Balance Pass (Step PL-4)** or debugging complex multi-service concurrency issues.
 
 ---
 
-## 1. Current Codebase Status Audit (`main` at `af46038`)
+## 1. Current Codebase Status Audit (`main` @ `af46038` + `game-like-ui`)
 
-> **VERIFIED IN STUDIO PLAYTEST (18 Server Services, 11 Client Controllers, 16 Shared Modules):**
+> **VERIFIED IN STUDIO PLAYTEST (18 Server Services, 13 Client Controllers, 16 Shared Modules):**
 
 ### 1.1 Movement, Camera & Controls (Done & Tested)
+
 * **Side-on 2.5D Lock:** Players and enemies are locked to the $Z = 0$ plane with a narrow side camera that smoothly follows the player vertically and shakes on hits (`Movement25DController`, `Camera25DController`, `Physics25D`).
-* **Movement Mechanics:** Walk, double jump (triple jump via Ascension node), drop down through platforms (`Down + Jump`), jump pads launching ~30 studs upward, and ground dash / air "flash jump" with recharging charges.
+
+* **Movement Mechanics:** Walk, double jump (triple jump via Ascension node), drop down through platforms (`Down + Jump`), jump pads launching \~30 studs upward, and ground dash / air "flash jump" with recharging charges.
+
 * **Cross-Platform Controls:**
+
   * **Keyboard & Gamepad:** `Q` / `LB` / `RB` for active ability; `I` / `B` / `Select` for the Bag.
+
   * **Mobile (`MobileControlsController`):** Floating virtual joystick plus Attack, `Q` (with cooldown display), Dash, and Jump buttons *(built in code; needs real mobile device verification)*.
+
 * **Attack Feel:** Character arm swings on every attack, and Gauntlets punches lunge the player forward.
 
 ### 1.2 All 8 Playable Weapons (Done & Tested — Each Cleared a Room)
+
 Every weapon is physically welded into the character's right hand both in Town and inside Portal Runs (`WeaponHoldService`).
 
-| Weapon | Unlock Cost | Basic Attack | `Q` Ability | Innate Passive | Link Skill (Mastery 10 / 20) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **1. Greatsword** | Free | Wide slash, hits up to 8 targets | **Rift Cleave** shockwave | $+15\%$ attack speed after hitting $3+$ enemies | $+8\% / +15\%$ Normal & Elite Dmg |
-| **2. Daggers** | Free | Fast twin-blade stab | **Shuriken Fan** (5 blades) | Dashing through an enemy guarantees next hit Crits | $+10\% / +20\%$ Critical Damage |
-| **3. Staff** | Free | Bolt that inflicts *Shock* | **Fireball** that explodes and *Burns* | *Burn* + *Shock* on one enemy triggers an *Arcane Nova* | $+8\% / +15\%$ Status Dmg & Duration |
-| **4. Bow** | $400$ Dust + $2$ Cores | Arrows that pierce through enemies | **Arrow Rain** (8 arrows, aims at an enemy) | Hitting the same target repeatedly stacks damage up to $+30\%$ | $+5\% / +10\%$ Critical Hit Rate |
-| **5. Hammer** | $750$ Dust + $4$ Cores | Slam that pops enemies up and stuns them | **Seismic Tremor** (3 erupting rock pillars + stun) | Bonus damage to stunned enemies; slams grant a shield | $+8\% / +15\%$ Boss Damage |
-| **6. Gauntlets** | $1,200$ Dust + $6$ Cores | 3-punch chain, 3rd punch hits harder with forward lunge | **Rising Uppercut** (launches you and enemies, *Burns*) | Combo doesn't drop while dashing; $+$damage per combo | $+6\% / +12\%$ Atk Speed & CDR |
-| **7. Summoning Bell** | $2,000$ Dust + $10$ Cores | Sonic pulse that commands foxes what to attack | **Call Rift Familiar** (2 Spirit Foxes for $12\text{s}$ firing bolts) | Foxes inherit your Crit, Attack Speed, and status effects | $+10\% / +20\%$ *Rift Dust* Drop Rate |
-| **8. Trick Cards** | $3,500$ Dust + $15$ Cores | Cards bounce to a second enemy | **Royal Flush** (5 cards) + draws a card | Every 6th attack draws **Red** (fire blast), **Blue** (cooldown cut), or **Gold** ($+$Dust) | $+8\% / +15\%$ Rare/Epic Upgrade Chance |
+| Weapon | Unlock Cost | Basic Attack | `Q` Ability | Innate Passive | Link Skill (Mastery 10 / 20) | 
+ | ----- | ----- | ----- | ----- | ----- | ----- | 
+| **1. Greatsword** | Free | Wide slash, hits up to 8 targets | **Rift Cleave** shockwave | $+15\%$ attack speed after hitting $3+$ enemies | $+8\% / +15\%$ Normal & Elite Dmg | 
+| **2. Daggers** | Free | Fast twin-blade stab | **Shuriken Fan** (5 blades) | Dashing through an enemy guarantees next hit Crits | $+10\% / +20\%$ Critical Damage | 
+| **3. Staff** | Free | Bolt that inflicts *Shock* | **Fireball** that explodes and *Burns* | *Burn* + *Shock* on one enemy triggers an *Arcane Nova* | $+8\% / +15\%$ Status Dmg & Duration | 
+| **4. Bow** | $400$ Dust + $2$ Cores | Arrows that pierce through enemies | **Arrow Rain** (8 arrows, aims at an enemy) | Hitting the same target repeatedly stacks damage up to $+30\%$ | $+5\% / +10\%$ Critical Hit Rate | 
+| **5. Hammer** | $750$ Dust + $4$ Cores | Slam that pops enemies up and stuns them | **Seismic Tremor** (3 erupting rock pillars + stun) | Bonus damage to stunned enemies; slams grant a shield | $+8\% / +15\%$ Boss Damage | 
+| **6. Gauntlets** | $1,200$ Dust + $6$ Cores | 3-punch chain, 3rd punch hits harder with forward lunge | **Rising Uppercut** (launches you and enemies, *Burns*) | Combo doesn't drop while dashing; $+$damage per combo | $+6\% / +12\%$ Atk Speed & CDR | 
+| **7. Summoning Bell** | $2,000$ Dust + $10$ Cores | Sonic pulse that commands foxes what to attack | **Call Rift Familiar** (2 Spirit Foxes for $12\text{s}$ firing bolts) | Foxes inherit your Crit, Attack Speed, and status effects | $+10\% / +20\%$ *Rift Dust* Drop Rate | 
+| **8. Trick Cards** | $3,500$ Dust + $15$ Cores | Cards bounce to a second enemy | **Royal Flush** (5 cards) + draws a card | Every 6th attack draws **Red** (fire blast), **Blue** (cooldown cut), or **Gold** ($+$Dust) | $+8\% / +15\%$ Rare/Epic Upgrade Chance | 
 
 ### 1.3 Server-Authoritative Combat Rules (Done & Tested)
+
 * **Multiplicative Damage Formula (`FormulaEngine`):** Hunter Level, Weapon Mastery, Rebirth, Ascension nodes, Link Skills, Relics, in-run upgrades, combo bonus, Curses, and Critical Hits all multiply cleanly.
-* **Status Effects:**
-  * **Burn:** Damage over time that spreads to nearby enemies when the target dies.
-  * **Shock:** Hits chain lightning to nearby enemies.
+
+* **Status Effects:** *Burn* (DoT that spreads on enemy death) and *Shock* (hits chain lightning to nearby enemies).
+
 * **Combo Counter:** $+1\%$ damage per 10 hits, up to $+50\%$.
+
 * **Invincibility Frames & Shields:** Short i-frame window after dashing or taking a hit; shields absorb damage before HP.
-* **Shadow Line Extra Hits:** Small bonus shadow hits triggered via the `Limit Breaker` Ascension node.
-* **Floating Damage Numbers & Combat VFX (`CombatVFXController`):** Color-coded damage numbers by type (crit, poison, shield, etc.), summoned spirit foxes, orbiting coins, erupting rock pillars, card draw visuals, and green screen vignette flash when touching acid.
+
+* **Shadow Line Extra Hits:** Bonus shadow hits triggered via the `Limit Breaker` Ascension node.
+
+* **Floating Damage Numbers & Combat VFX (`CombatVFXController`):** Color-coded damage numbers by type, summoned spirit foxes, orbiting coins, erupting rock pillars, card draw visuals, and green screen vignette flash when touching acid.
 
 ### 1.4 Enemies & Bosses — World 1: Mushroom Wilds (Done & Tested)
+
 * **Regular Enemies:** *Spore Blob* and *Mushroom Hopper*, plus tougher Elite variants that hop onto platforms and deal contact damage.
-* **Bosses:** *Spore Golem* (Room 5) and *Mushroom Titan* (Room 10).
-  * Telegraphed warning zones appear before attacks land.
-  * Bosses enter an enraged faster phase at $50\%$ HP.
-  * Hitting a thrown *Spore Boulder* back at the boss stuns it (`"EXPOSED - ATTACK!"` window).
+
+* **Bosses:** *Spore Golem* (Room 5) and *Mushroom Titan* (Room 10), featuring telegraphed warning zones, $50\%$ HP enraged phases, and deflectable *Spore Boulders* (`"EXPOSED - ATTACK!"` stun window).
+
 * **Procedural Animation:** Code-driven squash-and-stretch, hit-flinching, and overhead HP bars on imported 3D models.
 
 ### 1.5 Runs, Hazards, Upgrades & Curses (Done & Tested)
-* **10 Room Layouts + Endless Mode:** Combat rooms, 2 climbing rooms with rising acid (exit at the top), a Treasure room, and 2 boss rooms. After Room 10, runs continue endlessly with procedural room selection and a boss every 5th room.
-* **Bubbling Acid Flood (`HazardService`, `AmbientController`):** Multi-layered bubbling flood rendered on client while the server applies **$8\%$ Max HP damage per tick** and an upward lava bounce.
-* **At-Risk Loot Pouch & Rift Anchors:** *Rift Dust*, *Boss Cores*, and *Relic Shards* accumulate in an at-risk pouch until a boss checkpoint (**Rift Anchor**) banks them, letting the player choose to **Extract** or **Keep Pushing**.
-* **Tiered Defeat Loss:** $30\% / 50\% / 75\%$ of unsecured pouch lost depending on depth, with Defeat Screen options for Accept Defeat, Anchor Token Rewind/Insure, or Robux Revive/Rewind/Insure.
-* **10 Upgrade Cards:** Across Common to Legendary (*Sharpened Edge, Swift Hands, Keen Eye, Vital Surge, Ember Edge, Storm Conduit, Cleaving Gale, Triple Threat, Napalm Wake, Volatile Cinders*), with Reroll and Banish support.
-* **5 Curses:** Offered on altars in the Treasure room, up to 4 active per run (verified in testing: Max HP accurately scaled down from $258 \rightarrow 155$).
+
+* **10 Room Layouts + Endless Mode:** Combat rooms, 2 climbing rooms with rising acid (exit at the top), a Treasure room, and 2 boss rooms. Endless continuation past Room 10 with bosses every 5th room.
+
+* **Bubbling Acid Flood (`HazardService`, `AmbientController`):** Multi-layered bubbling flood rendered on client while the server applies $8\%$ **Max HP damage per tick** and an upward lava bounce.
+
+* **At-Risk Loot Pouch & Rift Anchors:** *Rift Dust*, *Boss Cores*, and *Relic Shards* sit in an at-risk pouch until banked at a **Rift Anchor**, where players choose to **Extract** or **Keep Pushing**.
+
+* **Tiered Defeat Loss:** $30\% / 50\% / 75\%$ pouch loss depending on depth, with Defeat Screen options for Accept Defeat, Anchor Token Rewind/Insure, or Robux Revive/Rewind/Insure.
+
+* **10 Upgrade Cards & 5 Curses:** Common to Legendary cards with Reroll and Banish; 5 Curses offered on Treasure room altars (up to 4 per run).
+
 * **Corruption Tiers:** Selectable at the Rift Gate; beating Room 10 unlocks the next Corruption Tier or World.
 
 ### 1.6 Relics & Star-Force System (`RelicService` — Done & Tested)
-* **8 Working Relics:** *Frost Heart, Treasure Tooth, Thunder Boots, Hungry Coin, Phoenix Feather, Vampiric Fang, Broken Crown, Volatile Hourglass*. Each has active combat hooks that scale up with each star level.
-* **Drop Rates & Shard Conversion:** $35\%$ drop chance from Room 5 boss, $100\%$ guaranteed from Room 10 boss, and $25\%$ from chests. Duplicate drops automatically convert into **+5 Relic Shards**.
-* **Non-Destructive Star-Force ($1\star \rightarrow 5\star$):** Failed attempts never lose stars and add $+25\%$ Pity to the next attempt. Safeguard items refund shards on failure.
-* **Starting Relics:** Players carry 1 Starting Relic into every run, expandable with the `Twin Relic Vessel` Ascension node and Gamepass.
+
+* **8 Working Relics:** *Frost Heart, Treasure Tooth, Thunder Boots, Hungry Coin, Phoenix Feather, Vampiric Fang, Broken Crown, Volatile Hourglass*.
+
+* **Drop Rates & Shard Conversion:** $35\%$ from Room 5 boss, $100\%$ from Room 10 boss, $25\%$ from chests; duplicates grant **+5 Relic Shards**.
+
+* **Non-Destructive Star-Force (**$1\star \rightarrow 5\star$**):** Failed strikes never lose stars and add $+25\%$ Pity heat to the next attempt; Safeguard refunds shards on failure.
+
+* **Starting Relics:** Carry 1 into every run (expandable via `Twin Relic Vessel` Ascension node and Gamepass).
 
 ### 1.7 Permanent Progression (Done & Tested)
-* **Hunter Level & Rebirth:** 10 structured Rebirth tiers followed by endless Rebirth scaling. Supports **Standard Rebirth**, **Keep Everything Rebirth**, and **Robux Instant Rebirth**.
-* **Weapon Mastery & Paragon (`MasteryService`):** Levels $1 \rightarrow 20$ plus up to $979$ Paragon ranks. Each weapon unlocks its account-wide **Link Skill** at Mastery 10 and upgrades it at Mastery 20, with up to 6 active Link Skill slots.
-* **Ascension Shop (17 Nodes Total):** **13 nodes are fully wired and functional**, including Respec (which refunds spent Sparks and automatically trims active Link Skill and Starting Relic slots to match). *4 nodes remain to be wired (see Section 2.1).*
 
-### 1.8 Town Hub — Haven Outpost (Done & Tested)
-* **9 Working Stations on Custom Landmarks (`LandmarkBuilder`):** All 9 stations have functional UI panels, and all except the Rift Gate stand as oversized landmarks on custom-themed animated platforms.
-* **Persistent Waypoints:** Markers always point toward every interactable and never hide when close, including chests, curse altars, and room exits inside runs.
-* **Fantasy Vista Scenery (`VistaBuilder`):** Floating islands with waterfalls, ancient World Tree, distant castle spires, stone aqueduct, drifting clouds, and floating spirit motes.
-* **High-Contrast Platforms:** Elevated platforms feature vibrant lime grass inside a timber frame with vines and flowers, contrasting cleanly against the darker forest ground floor.
-* **UI Panels (`StationPanels` & `UIController`):**
-  * `StationPanels`: Blacksmith, Legion Hall, Star-Forge, Quest Board, Hall of Champions, and Bag.
-  * `UIController`: Rift Gate, Rebirth Pedestal, Ascension Shop, and Robux Store.
-* **Quests & Leaderboards:** 3 Daily Quests drawn from a pool of 9 + 2 repeatable Bounties; 3 Leaderboards backed by `OrderedDataStore` with in-server fallback.
-* **HUD:** Displays Hunter Level, HP + Shield bar, XP & Mastery bars, active Relics and Curses, currencies, run banner, popup notifications, and celebration banners.
+* **Hunter Level & Rebirth:** 10 structured Rebirth tiers + endless scaling (**Standard Rebirth**, **Keep Everything Rebirth**, and **Robux Instant Rebirth**).
+
+* **Weapon Mastery & Paragon (`MasteryService`):** Levels $1 \rightarrow 20$ plus up to $979$ Paragon ranks; Link Skills unlock at Mastery 10 and upgrade at Mastery 20 (up to 6 active slots).
+
+* **Ascension Shop (17 Nodes Total):** **13 nodes are fully wired and functional**, including Respec. **4 nodes are flagged `ComingSoon = true`** until wired (see Section 2.1).
+
+### 1.8 Town Hub (Haven Outpost) & Scene UI Redesign (`game-like-ui` — Done & Tested)
+
+* **9 Working Stations on Custom Landmarks (`LandmarkBuilder`)** with persistent waypoints and high-fantasy sky/island vistas (`VistaBuilder`).
+
+* **All 8 Station Windows Rebuilt as Visual Scenes (`game-like-ui`):** Spark Sanctum skill tree, Quest Board parchment cards/bounties, Star-Forge anvil scene, Blacksmith weapon rack, Legion Hall mastery ring, Hall of Champions podium, Rebirth Before/After with two-tap confirm, Bag paper doll, Rift Gate world map, and Settings & Credits screen.
+
+* **HUD Glitches Fixed (`game-like-ui`):** Toasts stack cleanly beside open windows, Combo Counter sits under vitals on the left, and `"Label"` flash is eliminated.
 
 ### 1.9 Saving, Backend & Dev Tools (Done & Tested Online)
-* **DataStore Persistence & Session Locking:** Player profiles save/reload reliably, with session locking so the same profile cannot be opened on two servers simultaneously.
-* **Autosave & Safe Leave Payout:** Autosaves every 90 seconds; if a player leaves mid-run, their at-risk pouch is paid out properly before the final save writes.
-* **Lifetime Stats Tracking:** Tracks kills, elite kills, boss kills, rooms cleared, deepest room, chests opened, Dust banked, and extractions.
-* **Monetization Scaffolding:** Complete receipt/purchase handling for 13 Developer Products and 8 Gamepasses (all product/pass IDs currently set to `0` pending live Roblox asset creation).
-* **Studio Test Suite (`RiftDev`):** Studio-only console helpers to grant currencies, equip weapons, add relics, and set Mastery levels.
+
+* **DataStore Persistence, Session Locking, 90s Autosave & Safe Leave Payout.**
+
+* **Lifetime Stats Tracking & Monetization Scaffolding** (13 Products, 8 Gamepasses wired; IDs currently `0`).
+
+* **Studio Test Suite (`RiftDev`).**
 
 ---
 
-## 2. Remaining Gaps & Pre-Launch Specification (What Needs to Be Done Next)
+## 2. Remaining Pre-Launch Core Tasks (Steps PL-1 to PL-6)
 
-### 2.1 The 4 Unwired Ascension Shop Nodes (Priority Code Wiring)
+### 2.1 The 4 Unwired Ascension Shop Nodes (`ComingSoon = true` in `AscensionShopConfig`)
 
-These 4 of the 17 Ascension Shop nodes have no gameplay effect yet. **Since `8ac6b82` they are flagged `ComingSoon = true` in `AscensionShopConfig`:** the Spark Sanctum shows them with a "SOON" tag and `AscensionShopService` refuses to sell them, so no one wastes Sparks. When a node gets wired, delete its `ComingSoon` flag. Here is the exact specification for Claude Code to wire them up:
-
-> **ID correction (checked against `AscensionShopConfig`, 2026-10-30):** the real IDs are Vacuum Aura = `AS_T1_03`, Headstart Blessing = `AS_T1_04`, Elemental Crit Overload = `AS_T3_01`, Miracle Evolution = `AS_T4_02`. (`AS_T2_04` is *Boss Hunter's Trophy* and `AS_T3_02` is *Relic Resonance*, both already working.) The run service is `RunManagerService`, not `RunService`. Also note the config text differs slightly from the specs below: Headstart is "Common+ → Rare+ → Epic+" over 3 levels, Elemental Crit is "33% / 66% / 100% of Crit Damage", and Miracle Evolution is a 1-level node, "15% Double Orb". Decide which version wins before wiring.
+> **Verified Node IDs & Service Names (`AscensionShopConfig` & `RunManagerService`):**
+>
+> * `AS_T1_03` = **Vacuum Aura** (3 levels)
+>
+> * `AS_T1_04` = **Headstart Blessing** (3 levels: Common+ $\rightarrow$ Rare+ $\rightarrow$ Epic+)
+>
+> * `AS_T3_01` = **Elemental Crit Overload** (3 levels: $33\% / 66\% / 100\%$ of Crit Damage)
+>
+> * `AS_T4_02` = **Miracle Evolution** (1 level: $15\%$ chance for Double Upgrade Pick + guaranteed on Boss rooms)
+>
+> * *When wiring each node below, remove its `ComingSoon = true` flag in `AscensionShopConfig.luau`.*
 
 1. **Vacuum Aura (`AS_T1_03` — Loot Magnet & Drop Orbs):**
-   * **Why it currently does nothing:** Loot is currently granted directly to the pouch without spawning physical drop orbs, or lacks a pull magnet.
-   * **Implementation Spec:** When an enemy dies or a chest opens, spawn lightweight client-rendered glowing loot orbs (*Rift Dust* crystals, *Boss Cores*, *HP globes*) that scatter briefly and then magnetically accelerate toward the player within a base pickup radius of $14\text{ studs}$. Each level of **Vacuum Aura** increases pickup radius by $+35\%$ (at Lv. 3, full-room magnet pull from anywhere in the room) and grants $+2\%$ bonus *Rift Dust* collected.
+
+   * Spawn lightweight client-rendered glowing loot orbs (*Rift Dust* crystals, *Boss Cores*, *HP globes*) when enemies die or chests open that scatter briefly and magnetically accelerate toward the player within a base pickup radius of $14\text{ studs}$. Each level increases pickup radius by $+35\%$ (full-room pull at Lv. 3) and grants $+2\%$ bonus *Rift Dust*.
+
 2. **Headstart Blessing (`AS_T1_04` — Free Room 1 Upgrade Card):**
-   * **Why it currently does nothing:** Room 1 does not trigger the free bonus upgrade card check on run start.
-   * **Implementation Spec:** In `RunService:StartRun()`, check if the player owns `Headstart Blessing` (`Level >= 1`). If owned, immediately trigger a bonus **Headstart Upgrade Card Selection** at the start of Room 1 where every offered card is guaranteed to be **Rare or higher** (or **Epic or higher** if upgraded).
+
+   * In `RunManagerService`, when Room 1 starts, check if the player owns `AS_T1_04` (`Level >= 1`). If owned, trigger a bonus **Headstart Upgrade Card Selection** where cards have a minimum rarity floor of **Common+ (Lv. 1)**, **Rare+ (Lv. 2)**, or **Epic+ (Lv. 3)**.
+
 3. **Elemental Crit Overload (`AS_T3_01` — Status Effects Can Crit):**
-   * **Why it currently does nothing:** *Burn* ticks, *Shock* chains, and *Arcane Nova* procs currently deal flat non-critical damage.
-   * **Implementation Spec:** In `CombatService` status tick/proc evaluation, check if the attacker owns `Elemental Crit Overload`. If owned, roll the player's `CritRate` on every *Burn* tick, *Shock* chain, and *Arcane Nova* burst. On a critical status hit, multiply the status damage by `1 + (CritDamageBonus * 0.50 * NodeLevel)` and display an orange-gold critical status damage number.
+
+   * In `CombatService` status tick/proc evaluation, if the attacker owns `AS_T3_01`, roll `CritRate` on every *Burn* tick, *Shock* chain, and *Arcane Nova* burst. On crit, multiply status damage by `1 + (CritDamageBonus * (NodeLevel / 3))` and display an orange-gold crit status number.
+
 4. **Miracle Evolution (`AS_T4_02` — Double Upgrade Card Picks):**
-   * **Why it currently does nothing:** The room-clear upgrade picker always closes after 1 card pick.
-   * **Implementation Spec:** When rolling a room-clear Upgrade Selection, if the player owns `Miracle Evolution`, roll a $15\% \times \text{NodeLevel}$ chance (and **guaranteed $100\%$ on Boss Rooms 5 and 10**) to display a golden `"✨ MIRACLE EVOLUTION — PICK 2 UPGRADES!"` banner on the Upgrade Picker, allowing the player to select **2 cards** from the hand before closing.
+
+   * When rolling a room-clear Upgrade Selection in `RunManagerService`, if the player owns `AS_T4_02`, roll a $15\%$ chance (and $100\%$ on Boss Rooms 5 and 10) to display a golden `"✨ MIRACLE EVOLUTION — PICK 2 UPGRADES!"` banner, letting the player pick **2 cards** before closing.
 
 ---
 
-### 2.2 UI Bugs, Bag Redesign & Missing Screens (Step PL-2)
+### 2.2 Remaining UI & Onboarding Polish (Step PL-2)
 
-1. **Fix 3 Specific HUD & UI Glitches:** ✅ *Done 2026-10-30 (see Section 5.1).*
-   * **Popup Overlap Fix:** Toast/popup messages currently overlap open station windows. Move notifications to a high `ZIndex` top-center/top-right toast queue or suppress non-critical HUD popups while a full-screen station panel is open.
-   * **Combo Counter Overlap Fix:** Reposition the Combo Counter so it anchors cleanly below the player's health/ability cluster or left of center, never overlapping the top-right currency display.
-   * **"Label" Flash Before Profile Load Fix:** Initialize all HUD text labels with `Text = ""` (or a clean loading shimmer state) instead of default `"Label"` text until `PlayerDataLoaded` fires on the client.
-2. **Bag / Inventory UI Redesign (`StationPanels`):**
-   * Rebuild the Bag screen using the **UIPack's native Inventory Template** with clean weapon and relic icons (supporting `game-icons.net` decal asset IDs in `AssetRegistry` with crisp vector fallbacks).
-   * Display clear equipment slots (**Equipped Weapon**, **Starting Relic(s)**, **Active Link Skills**), live stat summary, and 1-click Equip/Unequip actions.
-3. **Add 3 Missing Essential Screens:**
-   * **End-of-Run Summary Screen:** Shown upon **Successful Extraction** (and integrated cleanly with Defeat), displaying: Total Rooms Cleared, Time Elapsed, Enemies & Bosses Defeated, Total *Rift Dust* / *Boss Cores* / *Relic Shards* Banked, Weapon Mastery XP Gained, Relics Discovered, and a `"Return to Haven Outpost"` button.
-   * **Settings Menu (HUD Gear Icon):** Toggle switches/sliders for: Music Volume, SFX Volume, Screen Shake On/Off, Teammate VFX Reduction, and Damage Number Style (Cascading vs. Compact).
-   * **First-Time Onboarding Tutorial (60-Second Guided Flow):** Highlights the **Rift Gate** with a golden tutorial prompt for brand-new players (`RoomsCleared == 0`), shows brief control callouts in Room 1 (`Move`, `Attack`, `Q Ability`, `Dash`), and guides them to the **Blacksmith** or **Star-Forge** after their first extraction.
+* **Completed on `game-like-ui`:** All 8 station scenes, Bag paper-doll redesign, Settings & Credits screen, and the 3 HUD glitch fixes are **done**.
+
+* **Still Needed for PL-2:**
+
+  1. **HUD Gear Button:** Add a direct `⚙` button on the HUD / Town side menu so players don't have to open the Bag first to find Settings (fixes `B26`).
+
+  2. **Hide Combo Counter on Defeat Screen:** Clear or hide the Combo Counter when the Rift Collapse (defeat) screen opens (fixes `B27`).
+
+  3. **End-of-Run Summary Screen:** Shown upon **Successful Extraction**, displaying rooms cleared, time elapsed, enemies/bosses slain, banked currencies (*Rift Dust*, *Boss Cores*, *Relic Shards*) with flying icon juice, Weapon Mastery XP gained, and a `"Return to Haven Outpost"` button.
+
+  4. **60-Second Spirit-Fox Onboarding Guide:** For brand-new players (`RoomsCleared == 0`), spawn a glowing **Spirit Fox guide** (or golden trail) that leads them from Town spawn $\rightarrow$ Rift Gate, shows brief control prompts in Room 1, and guides them to the Blacksmith after extraction.
 
 ---
 
-### 2.3 Audio & Sound Design Implementation (`AudioController.luau` — Step PL-3)
+### 2.3 Remaining Audio Hooks & Music (`Sfx.luau` / `AudioController` — Step PL-3)
 
-> **Partly started (2026-10-29/30):** 29 Kenney UI / forge / quest / combat sounds are uploaded and listed in `AssetRegistry.Sounds`. A small `client/Controllers/Sfx.luau` (`Sfx.Play(name, volume?, pitch?)`) plays them: every button clicks, station windows play an open / close sound, and the Quest Board and Spark Sanctum have claim / unlock sounds. **Still missing:** combat SFX hooks, enemy / boss SFX, music, pitch randomization, and the volume settings. `Sfx.luau` can grow into the `AudioController` described below.
+* **Completed on `game-like-ui`:** 29 Kenney UI/forge/quest/combat sounds are uploaded in `AssetRegistry.Sounds` and wired into UI buttons, station open/close, Quest Board, Star-Forge, Blacksmith, and Settings volume scaling (`Sfx.SetVolumeScale`).
 
-Originally the game was completely silent. Create a centralized `ReplicatedStorage.Shared.SoundConfig` and `StarterPlayerScripts.Controllers.AudioController` using pooled `SoundService` playback with pitch randomization (`PlaybackSpeed = 0.92 to 1.08`) so rapid attacks never sound robotic:
+* **Still Needed for PL-3:**
 
-* **Combat SFX:** Weapon swing whooshes (heavy metallic cleave for Greatsword, fast twin-slice for Daggers, arcane hum for Staff, bowstring twang, hammer ground-thud, rapid punch snaps, bell chime, card flick), hit impacts, critical hit chime, shield break, and dash whoosh.
-* **Enemy & Boss SFX:** Mushroom hop boing, boss warning siren/telegraph rumble, boulder deflect clang, boss stun shatter, and acid sizzle when touching Stage 3 poison.
-* **UI & Progression SFX:** Button hover/click, Upgrade Card appear/select, Legendary upgrade fanfare, Relic drop chime, Star-Force anvil strike (success fanfare vs. failure clink), Hunter Level Up, and Rebirth ascension chord.
-* **Music Layers:** Calm high-fantasy orchestral/synth loop for *Haven Outpost*, upbeat driving action track for *Mushroom Wilds* combat rooms, and high-tempo boss battle music for Rooms 5 and 10.
+  1. Hook the already-uploaded `Combat_Swing1/2`, `Combat_Chop`, `Weapon_Equip`, `Gate_Open`, and `Item_Drop` sounds into `CombatVFXController`, `WeaponHoldService`, Rift Gate, and loot drops with slight pitch randomization (`0.92` to `1.08`).
+
+  2. Fill the 6 empty legacy sound slots in `AssetRegistry.Sounds` (`Hit`, `Crit`, `LevelUp`, `Pickup`, `BossRoar`, `Rebirth`) using uploaded IDs or pitch-shifted combinations of existing sounds.
+
+  3. Add looping Background Music (Town BGM, Combat Run BGM, Boss BGM) with a **Music Volume** pill in `SettingsScene.luau`.
 
 ---
 
 ### 2.4 Pre-Launch Balance Pass Targets (Step PL-4 — Recommend Opus)
 
-> **CRITICAL ISSUE OBSERVED IN PLAYTEST:** Right now, an idle player dies in ~12 seconds against basic enemies, and several weapon/curse/cost curves need tuning.
+> **CRITICAL ISSUE CONFIRMED AGAIN (`B25`):** An idle player in Room 1 dies within \~12 seconds.
 
-1. **Player Survivability & Contact Damage Tuning:**
-   * Reduce normal enemy contact damage in World 1 Rooms 1–4 by $\sim 35\%$ and add a $0.85\text{s}$ post-hit contact immunity window so a new player takes $8-10$ hits to die rather than melting in 12 seconds.
-2. **Weapon DPS & Cooldown Parity:**
-   * Audit all 8 weapons in `WeaponConfig` so slower weapons (*Hammer*, *Greatsword*) deal enough AoE/stagger burst per swing to match high-attack-speed weapons (*Daggers*, *Gauntlets*, *Bow*), and tune `Q` cooldowns between $5\text{s}$ and $9\text{s}$.
-3. **Boss HP & Acid Damage:**
-   * Tune *Spore Golem* (Room 5) for a $45-60\text{s}$ fight and *Mushroom Titan* (Room 10) for a $75-100\text{s}$ fight at appropriate gear levels.
-   * Tune Rising Acid tick interval (`0.5s`) and damage ($6\%$ Max HP per tick in World 1) so climbing rooms feel thrilling without instantly killing players on a single missed jump.
-4. **Curse Risk/Reward & Star-Force Economy:**
-   * Ensure every Curse grants a multiplicative combat/loot upside ($+35\%$ to $+60\%$) that justifies its penalty, and smooth Star-Force *Relic Shard* costs ($5 \rightarrow 10 \rightarrow 20 \rightarrow 35$ Shards) and Daily Quest payouts.
+1. **Player Survivability & Contact Damage Tuning:** Reduce World 1 normal enemy contact damage by $\sim 35\%$ and add a $0.85\text{s}$ post-hit contact immunity window so a new player takes $8-10$ hits to die.
+
+2. **Weapon DPS & Cooldown Parity:** Balance all 8 weapons in `WeaponConfig` so slower AoE weapons (*Hammer*, *Greatsword*) match fast weapons (*Daggers*, *Gauntlets*, *Bow*), and tune `Q` cooldowns between $5\text{s}$ and $9\text{s}$.
+
+3. **Boss HP, Acid Damage & Economy:** Tune *Spore Golem* ($45-60\text{s}$), *Mushroom Titan* ($75-100\text{s}$), Rising Acid ($6\%$ Max HP per `0.5s` tick), Curse trade-offs ($+35\%$ to $+60\%$ reward/damage bonus), and Star-Force costs.
 
 ---
 
 ## 3. Pre-Launch Execution Roadmap (Steps PL-1 to PL-6)
 
-> **MODEL NOTE FOR CLAUDE:** Default to **Sonnet** for Steps PL-1, PL-2, PL-3, PL-5, and PL-6. Let the user know to switch to **Opus** for **Step PL-4 (Comprehensive Balance Pass)**.
-
-| Step | Focus Area | Exact Tasks to Complete | Model |
-| :--- | :--- | :--- | :--- |
-| **Step PL-1: Wire Final 4 Ascension Shop Nodes** | `Vacuum Aura`, `Headstart Blessing`, `Elemental Crit Overload`, `Miracle Evolution` | 1. Add physical/client loot orbs + `Vacuum Aura` magnet pull.<br>2. Trigger free Room 1 Rare/Epic+ upgrade pick for `Headstart Blessing`.<br>3. Allow *Burn*/*Shock*/*Nova* to crit with `Elemental Crit Overload`.<br>4. Allow double upgrade picks on proc/boss rooms with `Miracle Evolution`. | **Default (Sonnet)** |
-| **Step PL-2: UI Bug Fixes, Bag Redesign & Missing Screens** | HUD overlaps, Bag template, Run Summary, Settings, Tutorial | 1. Fix popup overlap with open panels, combo counter overlap with currencies, and `"Label"` text flash on load.<br>2. Rebuild Bag on the UIPack inventory template with weapon/relic icons.<br>3. Add **Run Summary Screen**, **Settings Menu**, and **First-Run Tutorial callouts**. | **Default (Sonnet)** |
-| **Step PL-3: Audio System & Sound Effects (`AudioController`)** | Music, Combat SFX, UI SFX, Boss & Hazard SFX | 1. Create `SoundConfig.luau` with categorized Roblox `rbxassetid://` audio IDs and volume/pitch rules.<br>2. Build `AudioController.luau` and hook SFX into weapon swings, hits, crits, skills, bosses, acid sizzle, UI clicks, Star-Force, and Town/Run BGM. | **Default (Sonnet)** |
-| **Step PL-4: Game-Wide Balance Pass** | Survivability, 8 Weapons, Boss HP, Acid, Curses, Economy | 1. Fix the "idle player dies in 12s" issue (tune contact damage + post-hit i-frames).<br>2. Balance DPS/cooldowns across all 8 weapons.<br>3. Tune Boss HP, Acid damage, Curse trade-offs, Star-Force costs, and Quest rewards. | **Switch to Opus** *(Remind user before starting PL-4)* |
-| **Step PL-5: World 1 Variety Expansion** | More Rooms, Upgrade Cards, Enemy Variants | 1. Add 6–8 additional World 1 room layouts (combat, platforming, elite ambush).<br>2. Expand Upgrade Card pool from 10 to 20+ cards.<br>3. Add 1–2 ranged/flying World 1 enemy variants (e.g., *Spore Spitter*, *Mycelium Bat*). | **Default (Sonnet)** |
-| **Step PL-6: Launch Prep, Real Robux IDs & Housekeeping** | Product IDs, Mobile/Console check, Cleanup | 1. Replace placeholder `0` IDs in `MonetizationConfig` with real Developer Product and Gamepass IDs.<br>2. Remove unused `DevRunPortal` script.<br>3. Verify `MobileControlsController` touch button sizing and gamepad navigation. | **Default (Sonnet)** |
+| Step | Focus Area | Exact Tasks to Complete | Model | 
+ | ----- | ----- | ----- | ----- | 
+| **Step PL-1: Wire Final 4 Ascension Nodes** | `AS_T1_03`, `AS_T1_04`, `AS_T3_01`, `AS_T4_02` | Wire `Vacuum Aura`, `Headstart Blessing`, `Elemental Crit Overload`, and `Miracle Evolution` in `RunManagerService` & `CombatService`, then remove `ComingSoon = true`. | **Sonnet** | 
+| **Step PL-2: Run Summary, Onboarding & Minor UI Fixes** | Merge `game-like-ui`, Run Summary, Spirit-Fox Guide, `B26`/`B27` | 1\. Merge `game-like-ui` to `main`.<br>2. Add HUD Settings icon (`B26`) and hide combo on defeat (`B27`).<br>3. Add **Run Summary Screen** on extraction and **Spirit-Fox Onboarding Guide**. | **Sonnet** | 
+| **Step PL-3: Combat SFX Hooks & Music** | `Sfx.luau`, `CombatVFXController`, Music | Hook uploaded combat/equip/drop sounds into gameplay, fill remaining 6 sound keys, add Town/Combat/Boss music loops, and add Music Volume to Settings. | **Sonnet** | 
+| **Step PL-4: Game-Wide Balance Pass** | Fix 12s idle death (`B25`), 8 Weapons, Bosses, Economy | Tune enemy contact damage + i-frames, weapon DPS parity, boss HP, acid tick damage, curse multipliers, and Star-Force costs. | **Opus** | 
+| **Step PL-5: Viral Hooks & World 1 Variety** | See **Section 6** (Weapon Auras, God-Build Synergies, AFK Sanctuary) | Implement the top viral retention hooks from **Section 6** + add 10 wild transformative Upgrade Cards and new room variations. | **Sonnet** (+ Sub-Agents) | 
+| **Step PL-6: Launch Prep & Housekeeping** | Real Robux IDs, API Key Rotation (`B10`), Mobile Test | 1\. Rotate Open Cloud API key (`B10`) & back up `.rbxl` file.<br>2. Set real Developer Product & Gamepass IDs.<br>3. Remove unused `DevRunPortal` script. | **Sonnet** | 
 
 ---
 
-## 4. Post-Launch Expansion Roadmap (After Steps PL-1 to PL-6)
+## 4. Post-Launch Expansion Roadmap
 
-Once the game launches with World 1 polished end-to-end, post-launch updates will roll out in this order:
-1. **Co-op Party UI at Rift Gate:** Connect a Party Create / Join modal at the Rift Gate to the existing 1–4 player server party and *Sidekick Sync* scaling backend.
-2. **Worlds 2–8 Content Updates:** Add *Toy Kingdom*, *Haunted Metro*, *Frozen Citadel*, *Neon Grid*, *Dessert Wastes*, *Sunken Archive*, and *Volcanic Factory* (each with custom tilesets, environmental mechanics, enemies, and 2 bosses; formula scaling is already in place).
-3. **MapleStory-Inspired Endgame Systems:** Collectible Damage Skins, Boss Familiar Cards, AFK Dojo Training Grounds, 8-Player Multi-Part Boss Raids, Weapon Potential Cubing, Guild Citadels, and Daily Shared-Seed Mirror Rifts.
-4. **Live-Ops & Retention:** Achievements & chat titles, seasonal portal events, Weekly Boss Rush mode, and Endless-Mode Seasonal Leaderboards.
+1. **Co-op Party UI at Rift Gate** (1–4 player party create/join modal wired to existing server party & *Sidekick Sync* scaling).
+
+2. **Worlds 2–8 Content Updates** (*Toy Kingdom, Haunted Metro, Frozen Citadel, Neon Grid, Dessert Wastes, Sunken Archive, Volcanic Factory*).
+
+3. **Endgame Systems** (8-Player Multi-Part Boss Raids, Guild Citadels, Daily Shared-Seed Mirror Rifts).
+
 ---
 
 ## 5. Live Development Log (Maintained by Claude Code)
 
-> **How this section works:** Claude Code updates it before every commit: what got finished, bugs it noticed (confirmed or suspected), what's left, and ideas. Sections 1–4 stay the design spec; this section tracks where the build actually is. Status icons: ✅ done & Studio-tested · 🟡 done but not fully verified · 🔨 in progress · ⬜ not started · 💡 idea only.
+> **How this section works:** Claude Code updates it before every commit: what got finished, bugs it noticed (confirmed or suspected), what's left, and ideas. Status icons: ✅ done & Studio-tested · 🟡 done but not fully verified · 🔨 in progress · ⬜ not started · 💡 idea only.
 
 ### 5.1 Changelog
 
-| Date | Commit | Branch | What Changed |
-| :--- | :--- | :--- | :--- |
-| 2026-10-28 | `af46038` | `main` | Single-player World 1 loop complete (old Steps SP-1 → SP-6): landmarks, vista, climb rooms + acid, waypoints, Blacksmith, Mastery, weapons 4–8, relics + Star-Force, curses, session locking, quests, leaderboards, mobile controls, station panels. |
-| 2026-10-29 | `e545dff` | `game-like-ui` | **Asset drop:** 96 game-icons.net icons (every weapon, ability, link skill, relic, Ascension node, quest, curse, upgrade card, currency + 15 UI glyphs), 16 Kenney VFX textures, 9 Kenney UI panel textures, and 29 Kenney sounds, all uploaded to Roblox. IDs are in `AssetRegistry.Icons / VfxTextures / UiTextures / Sounds`. |
-| 2026-10-29 | `8ac6b82` | `game-like-ui` | **Spark Sanctum → skill tree.** **Quest Board → pinned parchment cards + WANTED posters.** New `Sfx.luau` (all buttons click; windows open / close with sounds). Station window enlarged 660×540 → 700×600. 4 unwired Ascension nodes flagged `ComingSoon` (shown as SOON, refused by the server). |
-| 2026-10-30 | `146f53c` | `game-like-ui` | This live log (Section 5) added; Ascension node IDs in 2.1 corrected against the code. |
-| 2026-10-30 | `a284759` | `game-like-ui` | **Star-Forge → anvil scene** (`StarForgeScene.luau`): relic shelf, 5 star sockets, relic on the anvil, big success % with a pity "heat" bar, 3-blow hammer animation, star-slam / smoke-fizzle results. Shared helpers moved to `SceneKit.luau` (incl. a new `pill` button). **Bug fix:** *Broken Crown*'s description had unescaped `%` signs, so `RelicConfig.Describe("REL_07")` threw, on the server too (new-relic and star-up celebrations). |
-| 2026-10-30 | `13ca7f0` | `game-like-ui` | **Blacksmith → weapon rack** (`BlacksmithScene.luau`): 8 weapons on pegs on a wooden wall (never-forged = black silhouette + lock, switched-off = grey + OFF tag, owned = accent glow + Mastery badge, equipped = green ✔), and a detail card with damage / speed / Q-cooldown chips, passive, cost chips and one action (Forge / Reactivate / Equip). Forged weapons flare from white into colour with `Forge_Success`. |
-| 2026-10-30 | `5065462` | `game-like-ui` | **Legion Hall → mastery shrine** (`LegionScene.luau`): a 6-socket Link gem bar (filled / open "+" / locked), the selected weapon inside a ring of 20 Mastery pips (10 and 20 are numbered gem pips in the weapon's colour; the next pip pulses), XP bar, a Link card with the bonus as a huge "+8%", M10 / M20 tier chips and a "💎 Socket it" / "Remove gem" button, and a strip of the 8 weapons with M-levels and a gem dot when socketed. |
-| 2026-10-30 | `8e64c65` | `game-like-ui` | **Hall of Champions → podium** (`HallScene.luau`): banner tabs for the 3 boards, top 3 on gold / silver / bronze pedestals that rise in, with avatar headshots (`rbxthumb://` — no web calls) and a crowned, glowing #1, ranks 4–10 in a two-column list, and a "You" bar with your score and rank. Server: `LeaderboardService` entries now carry `UserId` (display only). |
-| 2026-10-30 | `b99fe86` | `game-like-ui` | **Rebirth → before / after** (`RebirthScene.luau`): Hunter Level bar racing to the required level with a portal that glows **READY!**, NOW vs AFTER cards (Damage & HP, Dust & XP multipliers, +Sparks) with a pulsing », Standard / Keep Everything choice cards whose buttons **need a second tap to confirm** (the old panel rebirthed on one click) or say why they're locked, and the Robux options as pills. The renderer moved out of `UIController` (−89 lines, −3 locals: `renderPedestal`, `itemRow`, `rebirthRemote`); the kit now passes `requestPurchase`. |
-| 2026-10-30 | `54cd527` | `game-like-ui` | **Bag → paper doll** (`BagScene.luau`): your full-body avatar with the weapon slot (M-badge) on one side, Starting Relic slots (filled / "+" / locked) on the other and Link gems underneath; a weapon card with Mastery bar and stat chips; a "This run" strip of relics and curses during runs; a quick-swap grid (tap a weapon to equip, tap a relic to toggle start-with; town only). **All 8 station windows are now scenes**; `StationPanels` is just routing + the Celebrate banner (≈420 → 159 lines, old list helpers deleted). |
-| 2026-10-30 | `fa8630c` | `game-like-ui` | **Rift Gate → world map** (`RiftGateScene.luau`): 8 islands on a snaking dotted path over a starfield (open worlds glow in their colour with a Corruption badge, locked worlds show a padlock, unbuilt worlds 2–8 are shadowed "SOON" with their planned names), a Corruption dial (big tier, −10/−1/+1/+10 pills, reward multiplier in gold; a "beat the Room 10 boss" hint until it unlocks), and a portal panel with **Open Portal**. `UIController` keeps `startRun(world, corruption)` and passes it through the kit (−95 lines; `renderRiftGate`, `selectedWorld`, `selectedCorruption`, `unlockedTierFor`, `MAX_WORLDS` removed). Disabled `SceneKit.pill`s now look clearly greyed out. |
-| 2026-10-30 | `708eb77` | `game-like-ui` | **Settings & Credits screen** (`SettingsScene.luau`, opened from the ⚙ in the Bag, works in runs too): SFX volume (Off / 25 / 50 / 75 / 100 %) and Screen Shake (On / Off) as big pills, saved with the profile via a new `SaveSettings` remote (validated in `PlayerDataService`; new `Settings` profile field, existing saves get defaults), applied on every profile update (`Sfx.SetVolumeScale`, `Camera25DController.SetShakeEnabled`). The **Credits** card names the game-icons.net authors (CC BY 3.0) and Kenney (CC0), **fixing B3**. |
-| 2026-10-30 | *(next commit)* | `game-like-ui` | **The 3 HUD glitches from 2.2 fixed.** (1) Toasts: while a station window is open they stack at the bottom-right edge beside it instead of covering its title (top-centre otherwise). (2) The combo counter moved from the right edge (inside the currency column) to the left, under the vitals. (3) "Label" flash: `LABEL_DEFAULTS.Text = ""`, plus blank defaults on the waypoint and boss-callout labels. |
+| Date | Commit | Branch | What Changed | 
+ | ----- | ----- | ----- | ----- | 
+| 2026-10-28 | `af46038` | `main` | Single-player World 1 loop complete (old Steps SP-1 $\rightarrow$ SP-6): landmarks, vista, climb rooms + acid, waypoints, Blacksmith, Mastery, weapons 4–8, relics + Star-Force, curses, session locking, quests, leaderboards, mobile controls, station panels. | 
+| 2026-10-29 | `e545dff` | `game-like-ui` | **Asset drop:** 96 game-icons.net icons, 16 Kenney VFX textures, 9 Kenney UI panel textures, and 29 Kenney sounds uploaded to Roblox and indexed in `AssetRegistry`. | 
+| 2026-10-29 | `8ac6b82` | `game-like-ui` | **Spark Sanctum** $\rightarrow$ **skill tree.** **Quest Board** $\rightarrow$ **pinned parchment cards + WANTED posters.** New `Sfx.luau`. Station window enlarged $660\times 540 \rightarrow 700\times 600$. 4 unwired Ascension nodes flagged `ComingSoon`. | 
+| 2026-10-30 | `146f53c` | `game-like-ui` | Live log (Section 5) added; Ascension node IDs in 2.1 corrected against the code. | 
+| 2026-10-30 | `a284759` | `game-like-ui` | **Star-Forge** $\rightarrow$ **anvil scene** (`StarForgeScene.luau`). Shared helpers moved to `SceneKit.luau`. **Bug fix:** Escaped `%` signs in *Broken Crown* (`REL_07`) description (`B12`). | 
+| 2026-10-30 | `13ca7f0` | `game-like-ui` | **Blacksmith** $\rightarrow$ **weapon rack** (`BlacksmithScene.luau`). | 
+| 2026-10-30 | `5065462` | `game-like-ui` | **Legion Hall** $\rightarrow$ **mastery shrine** (`LegionScene.luau`). | 
+| 2026-10-30 | `8e64c65` | `game-like-ui` | **Hall of Champions** $\rightarrow$ **podium** (`HallScene.luau`) with `rbxthumb://` avatar headshots. | 
+| 2026-10-30 | `b99fe86` | `game-like-ui` | **Rebirth** $\rightarrow$ **before / after** (`RebirthScene.luau`) with two-tap confirmation. | 
+| 2026-10-30 | `54cd527` | `game-like-ui` | **Bag** $\rightarrow$ **paper doll** (`BagScene.luau`). All 8 station windows are now visual scenes; `StationPanels` reduced from \~420 to 159 lines. | 
+| 2026-10-30 | `fa8630c` | `game-like-ui` | **Rift Gate** $\rightarrow$ **world map** (`RiftGateScene.luau`). | 
+| 2026-10-30 | `708eb77` | `game-like-ui` | **Settings & Credits screen** (`SettingsScene.luau`), fixing `B3` CC BY 3.0 attribution. | 
+| 2026-10-30 | *(latest)* | `game-like-ui` | **Fixed the 3 HUD glitches from 2.2** (`B11`, `B16`): Toasts stack at bottom-right beside open windows, Combo Counter moved to left under vitals, and `"Label"` flash eliminated. | 
 
-### 5.2 Game-Like UI Redesign (Branch `game-like-ui`)
+### 5.2 Technical Notes & Known Bugs Summary
 
-**Why:** the player feedback was "too many words, words too small, feels like scrolling through a list, doesn't feel like a game".
+* **Key Architectural Guardrails:**
 
-**Design pillars (apply to every panel):**
-1. **Icon first, words second.** Every item, node, quest and currency shows its uploaded icon. Text is a short label, never a paragraph.
-2. **One big number per thing.** The count, price or level is large (TextSize 28–40); everything else is secondary.
-3. **Details on tap.** The main view is a scene / grid; tapping something opens a detail card with the full description and the action button.
-4. **Show progress visually.** Pips, rings, bars, stamps and glows, not "x / y" sentences.
-5. **Every action gives feedback.** A sound (`Sfx.Play`), a pop / burst (`flare_01` bloom), and reward icons that fly toward the counter.
-6. **Each station has its own material.** Parchment for the Quest Board, starlit stone for the Sanctum, iron and embers for the Forge, wood for the Blacksmith rack, marble and gold for the Hall of Champions.
+  * `UIController` is at Luau's 200-local limit—never add locals there; put new scenes in separate modules using `SceneKit.luau`.
 
-| Panel | Status | Scene Concept |
-| :--- | :--- | :--- |
-| **Spark Sanctum** (Ascension) | ✅ | Skill tree with tier rows T1–T4 + ∞. Round icon nodes joined by glowing branches, locked tiers say "🔒 Rebirth X", level pips under each node, gold glow on affordable nodes. A detail card on the right holds the Upgrade button. Big Sparks counter + two-click Respec. |
-| **Quest Board** | ✅ | 3 pinned parchment cards (icon disc, big "12 / 60", bar, reward icons, glowing Claim). Claiming flies the rewards and slams a DONE stamp. 2 WANTED bounty posters below. Countdown pill shows when the next dailies arrive. |
-| **Star-Forge** | ✅ | **Anvil scene.** A shelf of 8 relic tiles (undiscovered = dark silhouette + "?", equipped = green bag badge). The selected relic sits on an anvil under **5 star sockets** (the next one pulses orange). Success chance is a huge % with a bar whose orange end is the **pity "heat"** from failed strikes. The detail card has the effect, the next star's bonus, the cost (red when short), **🔨 STRIKE!**, and small Guard (Safeguard) / Start-with toggles. STRIKE swings a hammer 3 times (`Forge_Hammer1–3` + sparks), then a star slams into its socket (`Forge_Success` + bursts) or smoke puffs (`Forge_Fail`) and the heat pours in. Tested on real server data: a 90% fail, then a 100% success. |
-| **Blacksmith** | ✅ | **Weapon rack.** 8 weapons hang on pegs on a wooden wall: owned ones glow in their accent colour with an M-level badge, never-forged ones are black silhouettes with a lock, Rebirth-switched-off ones are grey with an OFF tag, and the equipped one has a green ✔. The detail card underneath shows the big icon, 3 stat chips (damage, attacks/s, Q cooldown), the passive + Q name, the cost (red when short) and one action button. Tested: browsing, locked costs, Equip round-trip (Greatsword ⇄ Staff). |
-| **Legion Hall** | ✅ | **Mastery shrine.** Link gem bar on top (sockets fill with the Link's icon in the weapon's colour; locked sockets show a padlock), the weapon in a ring of 20 Mastery pips with gem pips at 10 / 20, a Link card with the bonus in huge text and M10 / M20 tier chips, and a weapon strip to switch. Newly socketed gems pop in; a weapon that levelled since your last look flares. Tested: renders, weapon switching. *Not yet tested:* socketing (no weapon at M10 on the test profile, see B17). | **Weapon carousel** with a big **Mastery ring** around the weapon icon (XP progress as a radial ring, level in the middle). **6 link-gem sockets** along the bottom: drag / tap a weapon's Link gem into a socket. Locked sockets show the Mastery needed. |
-| **Hall of Champions** | ✅ | **Podium.** Banner tabs (Deepest Room / Hunter Power / Monsters Slain), top 3 on pedestals that rise in (2nd, 3rd, then the champion), avatar headshots, a 👑 and glow on #1, your name in blue wherever it appears, ranks 4–10 as a two-column list, and a "You" bar (score + rank or "Not in the top 10 yet"). Tested with the real 1-player board and a mocked full top 10, including tab switching. | **Podium** with the top 3 as avatar headshots (gold / silver / bronze pedestals), ranks 4–10 as hanging ribbons, 3 board tabs as banners. The player's own rank is pinned at the bottom. |
-| **Rebirth** | ✅ | **Before → After.** Level bar + READY portal, NOW / AFTER cards with big multipliers and +Sparks, two choice cards with icon lines (what resets, what's kept) and a **two-tap confirm**, Robux pills (Instant only shows while you're not eligible). Tested with real data (Lv 8 / 50) and a mocked eligible preview (first tap → "Tap again to Rebirth!"; the second tap was deliberately not sent). |
-| **Bag** | ✅ | **Paper doll** (replaces the 2.2 "UIPack inventory template" plan). Avatar + weapon slot + Starting Relic slots + Link gems, a weapon stat card, a run strip (relics with stars, curses) while in a run, and a tap-to-swap grid of owned weapons and relics. Tested in town: render, relic toggle on and off (pop into the slot), no errors. *Not yet seen:* the in-run strip (B23). | **Paper doll.** Character silhouette with Weapon, Starting Relic(s) and Link Skill slots around it; a live stat summary with icons; an inventory grid below with 1-tap equip. |
-| **Rift Gate** | ✅ | **World map** (see changelog). Tested: render, Open Portal really starts a run (RunId set, window closes). *Not yet seen:* Corruption pills with a tier unlocked (B24). |
-| **Store** | ✅ (already) | Checked 2026-10-30: the Rift Shrine store was already a game-style screen (ShardUI illustrated cards, corner badges, green Robux price buttons, tab sidebar). No rebuild needed. |
-| **Settings & Credits** | ✅ | SFX volume + Screen Shake pills (saved to the profile, applied on join) and the Credits card. Open via ⚙ in the Bag. Tested: open, Screen Shake Off → saved on the server → On again. |
-| **HUD** | ✅ | The 3 glitches from 2.2 are fixed (toasts beside open windows, combo on the left, no "Label" flash). Tested: toasts with the Blacksmith open, a 27 combo in a run, and a scan for any label still reading "Label". |
+  * Roblox does not render `Rotation` on GuiObjects inside a `ClipsDescendants` scrolling frame; render rotating elements on `SceneKit.overlay()`.
 
-**Tech notes for whoever continues:**
-* Each scene gets its own module (`StationScenes.luau` = Sanctum + Quest Board, `StarForgeScene.luau`, ...) using the shared helpers in `SceneKit.luau` (`tween`, `circle`, `icon`, `hoverGrow`, `burst`, `pill`, and an `overlay()` layer above the window where rotation renders). Route each scene through `StationPanels.Renderers`. **`UIController` is at Luau's 200-local limit**, so never add locals there.
-* The kit `K` (passed into `StationPanels.Init` / `StationScenes.Init`) has `create`, `newLabel`, `newButton`, `round`, `outline`, `newBar`, `currencyIcon`, `formatNumber`, `profile()`, `renderStation`, `content()`, `newLayer`, etc.
-* **Roblox does not render `Rotation` on GuiObjects inside a `ClipsDescendants` scroll frame.** Tilted cards and rotated stamps don't work inside station content; animate rotating things on `SceneKit.overlay()` instead (that's how the forge hammer swings).
-* **The kit's ShardUI gem buttons ignore the height you give them** (always ~55). Use one for the main action only; use `SceneKit.pill` for small toggles.
-* Test a panel without playing through: from the Server datamodel, fire `OpenStation` to the player with crafted `{Station=..., Data=...}`.
+* **Open Bugs to Address:** `B1` (verify audio volumes in playtest), `B2` (group asset ownership if published under a group), `B8` (6 empty legacy sound slots), `B10` (**rotate Open Cloud API key**), `B25` (**idle player dies in 12s in Room 1 — fix in Step PL-4**), `B26` (add HUD shortcut button for Settings), `B27` (hide combo counter behind defeat screen).
 
-### 5.3 Known & Potential Bugs
+---
 
-| # | Severity | Status | Issue |
-| :--- | :--- | :--- | :--- |
-| B1 | Medium | Suspected | **Sounds not heard yet.** All 29 sounds preload with Success in Studio, but nobody has listened to them in a playtest. Volumes may need tuning (default 0.5). |
-| B2 | High (launch) | Open | **Asset ownership.** All images and sounds were uploaded under the personal account (userId 94633131). If the game is ever published under a **group**, the assets must be re-uploaded to the group or given permission, or they'll show blank or silent. |
-| B3 | High (legal) | ✅ Fixed | **game-icons.net is CC BY 3.0, which requires an in-game credit.** No credits screen exists yet. Credit text is in `assets/icons/picked/CREDITS.txt`. |
-| B4 | Low | Probably OK | **Rojo drift risk.** Some Studio syncs were pushed in directly while the Rojo plugin wasn't connected. On 2026-10-30, Studio already matched `src/` before a manual push, so something is live-syncing again. Confirm the Rojo plugin says "Connected". |
-| B5 | Low | Accepted | Any Sparks spent on the 4 now-`ComingSoon` nodes before `8ac6b82` stay spent (levels kept, no effect). Respec refunds them. No live players yet, so this is harmless. |
-| B6 | Medium | Unverified | The Sanctum level-up burst and the Quest Board DONE-stamp were tested with **crafted** data. The test profile hasn't rebirthed, so a real buy has not been tested. |
-| B7 | Medium | Unverified | The 700×600 station window relies on `UIScale` to fit phones; check on a real small-screen device (and with the mobile buttons on screen). |
-| B8 | Low | Open | Legacy empty sound slots (`Hit`, `Crit`, `LevelUp`, `Pickup`, `BossRoar`, `Rebirth`) in `AssetRegistry.Sounds` still have no IDs, so code calling them is silent. |
-| B9 | Low | Not ours | Console warning for `rbxassetid://203785492` comes from existing place content, not `src/`. |
-| B10 | Security | Open | **Rotate the Open Cloud API key.** It was pasted into a chat once. It now lives in `~/.config/rift-rush/opencloud.key` (never commit it). |
-| B11 | Medium | ✅ Fixed | Section 2.2's popup / combo / "Label"-flash HUD glitches are still unfixed. Popups may cover the new, bigger station window. |
-| B12 | High | ✅ Fixed | *Broken Crown* (`REL_07`) `Desc` had literal `+35%` / `50%` in a `string.format` string, so `Describe` threw "missing argument #3": the old Star-Forge panel errored, and the **server** errored when announcing a new Broken Crown or a star-up. Escaped as `%%`. Lesson: any `%` in a relic `Desc` must be written `%%`. |
-| B13 | Low | Open | The Star-Forge's test profile was spent down in testing (Broken Crown 1★ → 2★, 10 Shards and 500 Dust used). Harmless in Studio. |
-| B15 | Low | Unverified | The Blacksmith's "just forged" flare + `Forge_Success` were not run on real data (it would have spent the test profile's only 2 Boss Cores and permanently unlocked the Bow). Same detection pattern as the Sanctum and Star-Forge, which do work. |
-| B16 | Low | ✅ Fixed | Station-panel toasts ("Greatsword equipped") appear on top of the window header. That's B11 in action; it doesn't block anything. |
-| B17 | Low | Unverified | Legion Hall gem socketing / removing and the socket pop were not exercised: no weapon on the test profile is at Mastery 10. The remote (`LoadoutAction EquipLink / UnequipLink`) is unchanged from the old panel. |
-| B18 | Info | Note | Clicking outside the station window closes it (by design). When testing with MCP mouse input, use `AbsolutePosition` coordinates: screenshots include the 58px top-bar inset. |
-| B19 | Info | Note | Restarting Studio Play many times quickly logs "DataStore request was added to queue" (each stop saves and releases the session lock). Harmless; it's the test loop, not game code. |
-| B20 | Low | Idea | The Hunter Power tab uses the `UI_Rebirth` glyph, which reads as a plain ring. A crown / sword icon would read better if one gets added to the icon pack. |
-| B21 | Low | Unverified | The "just rebirthed" burst on the AFTER card has not been seen live (would need a real Rebirth of the test profile). |
-| B22 | Info | Note | The display font lacks some symbols ("➜", "✔" render blank / faint). Use "»", "★", "✓"-free text, or icons in new scenes. |
-| B23 | Low | Unverified | The Bag's "This run" strip (relic / curse icons from the `RunRelics` / `RunCurses` attributes) has not been viewed during a real run yet. |
-| B24 | Low | Unverified | Rift Gate Corruption pills / multiplier with a real unlocked tier: the test profile hasn't beaten Room 10, so only the "locked" hint has been seen. |
-| B25 | High (balance) | Confirmed again | An idle character in Room 1 died within seconds of a test run (Rift Collapse screen). Same issue as 2.4 / PL-4. Nothing was lost (empty pouch). |
-| B26 | Low | Open | Settings is only reachable through the Bag's ⚙. A gear on the HUD / town menu would make it easier to find. Music volume and damage-number style (from 2.2) aren't there yet: there's no music, and only one damage-number style. |
-| B27 | Low | Open | The combo counter stays on screen behind the Rift Collapse (defeat) screen until the combo attribute resets. Cosmetic. |
-| B14 | Low | Watch | If the server refuses a strike (cooldown, a run started), the forge waits ~4s then re-enables STRIKE; the hammer still swings first. That's fine, but a refusal message comes only as the normal Notify toast. |
+## 6. Viral Growth, TikTok Spectacle & Roblox Mass-Appeal Mechanics (Solving the "Too Niche" Problem)
 
-### 5.4 Leftover Deliverables (Checklist)
+> **WHY THIS SECTION EXISTS:** Pure single-player roguelites can feel too niche on Roblox if players only grind deterministic shop upgrades alone in private rooms. On Roblox, games blow up through **3 viral loops**:
+>
+> 1. **RNG Jackpot Moments & Town Hub Flexing** (*Sol's RNG / Blox Fruits / Pet Sim* appeal — rolling something `1 in 1,000` with a dramatic screen cutscene and flexing a giant glowing aura/weapon in Town).
+>
+> 2. **Absurd "God-Build" Screen Spectacle** (*Vampire Survivors* appeal — upgrades that visually multiply projectiles, size, and hit-counts until the player clears whole rooms in 1 second of rainbow chaos, making instant TikTok/Shorts clips).
+>
+> 3. **Zero-Friction Casual / AFK Progression** (giving tired or mobile players a way to hang out in Haven Outpost, flex their titles/auras, and passively earn *Rift Dust* + Mastery XP, skyrocketing **Average Session Length** for the Roblox Discovery algorithm).
 
-**UI redesign:**
-- [x] Spark Sanctum skill tree
-- [x] Quest Board cards + bounty posters
-- [x] Star-Forge anvil scene
-- [x] Blacksmith weapon rack
-- [x] Legion Hall mastery ring + link-gem sockets
-- [x] Hall of Champions podium
-- [x] Rebirth before → after (with two-tap confirm)
-- [x] Bag paper doll (replaces 2.2 item 2)
-- [x] Settings & Credits screen (fixes B3)
-- [x] Rift Gate world map
-- [x] Store (already game-style, checked)
-- [x] HUD fixes from 2.2 (popup overlap, combo overlap, "Label" flash)
-- [ ] Merge `game-like-ui` → `main` after the user reviews it
+### 6.1 Viral Feature 1: Weapon Enchantment / Aura Rolling at the Blacksmith ("Rift Reforging")
 
-**Assets now in hand but not used yet:**
-- [ ] 10 of 16 VFX textures (`slash_02`, `spark_04`, `magic_01`, `trace_02`…; the Star-Forge now uses `spark_01`, `smoke_01`, `fire_01`) for combat hit sparks, Burn / Shock visuals, dash trails and boss telegraphs in `CombatVFXController`
-- [ ] 7 of 9 Kenney UI panel textures (wood / brown panels for the Blacksmith, buttons)
-- [ ] `Combat_Swing1/2`, `Combat_Chop`, `Weapon_Equip`, `Gate_Open`, `Item_Drop` sounds → hook into combat, equip, Rift Gate and loot drops
+Right now, once a player buys a weapon at the Blacksmith (`400 Dust + 2 Cores`), it is identical to everyone else's weapon.
 
-**Carried over from Sections 2–3:** PL-1 (4 nodes), PL-2 (HUD fixes, run summary, settings, tutorial), PL-3 (rest of audio + music), PL-4 (balance pass, Opus), PL-5 (World 1 variety), PL-6 (real product IDs, cleanup, device tests), plus backing up the place file (models + ShardUI aren't in git).
+* **The Viral Hook:** Add a **"Reforge Aura / Enchant"** button in `BlacksmithScene.luau` (costing *Rift Dust* or a *Reforge Token* dropped by bosses).
 
-### 5.5 Asset Pipeline (How to Add More Icons / Sounds)
-1. Drop downloads into `assets/<models|ui|vfx|audio|icons>/` (git-ignored), then copy the chosen files into that folder's `picked/` with the game ID as the filename (e.g. `Relic_REL_09.png`, `Forge_Anvil.ogg`).
-2. **Images:** upload via the Roblox Studio MCP `upload_image` (serve `picked/` on a localhost http server and pass the URLs).
-3. **Audio:** upload via Open Cloud `POST /assets/v1/assets` (`assetType: Audio`, creator userId 94633131), then poll the operation for the asset ID.
-4. Paste the IDs into `AssetRegistry` under the same key. UI code looks icons up by key (`Weapon_<Id>`, `Relic_<Id>`, `Asc_<NodeId>`, `Quest_<Id>`, `Cur_<Currency>`, `UI_<Glyph>`) and sounds by name (`Sfx.Play("Forge_Success")`).
-5. If it's a CC BY asset, add the author to the credits list.
+* **How It Works:** Rolling gives the weapon a tiered **Visual Aura + Prefix Stat Multiplier** with visible odds:
 
-### 5.6 Creative Ideas Backlog (Claude's Suggestions — Not Committed Scope)
-💡 These are pitches for the user to pick from, not promises.
+  * **Common (60%):** *Sharp* ($+10\%$ Dmg, subtle white sheen)
 
-**Make Haven Outpost feel alive**
-* **Station keepers:** a small NPC at each station (a stout smith hammering at the Blacksmith, a robed sage at the Sanctum) who reacts when you buy something. The smith slams the anvil in the 3D world when you Star-Force.
-* **The town grows with you:** each Rebirth tier lights another lantern line, raises a banner or opens a new market stall, so progress is visible without opening a menu.
-* **Trophy wall:** first kill of each boss mounts its head / cap in the Hall of Champions. Endless-mode depth records go on a stone tablet.
+  * **Rare (25%):** *Stormforged* ($+25\%$ Dmg, $+10\%$ Atk Speed, crackling blue lightning particles on the weapon in hand)
 
-**Collection & long-term goals**
-* **Relic Codex:** a book with a page per relic. Undiscovered relics are silhouettes with a one-line riddle hinting where they drop. A 5★ relic gets a gold-leaf page. Completing a full row gives a cosmetic title.
-* **Weapon Awakening:** at Paragon 25 / 50 / 100 the weapon model gets a glow, then particles, then a recolour. Free prestige that you can see.
-* **Damage-number skins** from Mastery milestones and bounties (ties into the post-launch Damage Skins plan).
+  * **Epic (10%):** *Void-Touched* ($+50\%$ Dmg, $+1$ Extra Projectile/Slash Wave, purple nebula trail)
 
-**Daily reasons to come back**
-* **Rift Chest calendar:** a 7-day login streak chest on the Quest Board; day 7 is a Relic Shard bundle.
-* **Rift Weather:** a daily global modifier shown at the Rift Gate ("Spore Storm: +30% enemies, +40% Dust"), a cheap way to add variety.
-* **Weekly Rift Contract:** a big 3-step poster on the Quest Board ("Clear Room 10 with Hammer → without dashing → under 6 min") with a large payout.
+  * **Legendary (4%):** *Celestial* ($+100\%$ Dmg, $+20\%$ Crit Rate, golden wings/halo particle aura around the player in Town)
 
-**Juice & feel**
-* **Hit-stop:** a 40–60 ms freeze on crits and boss hits, plus a `slash_02` spark texture at the impact point.
-* **Loot fountain:** when extracting, banked currencies pour out of the Rift Anchor as icons into the HUD counters (reuses the Quest Board fly-to-counter code).
-* **Star-Force streaks:** 3 successes in a row set the anvil on fire for the next strike (purely cosmetic, so it's not a gambling buff).
+  * **Mythic (1% — Server Chat Announcement + Cutscene Flash):** *Rift Sovereign* ($+200\%$ Dmg, **Size** $+40\%$, screen-flash cutaway on roll, and a global server toast: `"🔥 [Player] just forged a MYTHIC [Rift Sovereign Greatsword] (1 in 100)!"`)
 
-**Accessibility (directly answers the "words are too small" feedback)**
-* A **Text Size** slider in Settings that scales a `UIScale` on all panels.
-* A **colour-blind palette** for damage numbers (crit / burn / shock also differ by shape or icon, not just colour).
-* A **Reduce Flashing** toggle that turns off screen shake, bursts and vignette flashes.
+* **Why It Goes Viral:** Players become obsessed with rolling a *Celestial* or *Rift Sovereign* weapon to show off in Haven Outpost, and the server-wide chat broadcast creates instant FOMO.
 
-**Onboarding**
-* A **spirit-fox guide** (the Summoning Bell familiar) leads brand-new players from spawn → Rift Gate → (after the first extraction) Blacksmith, as a waypoint you can follow, instead of text popups.
+### 6.2 Viral Feature 2: "Overclocked / Mutated" Screen-Filling Upgrade Cards (TikTok Clip Fuel)
+
+Right now, the 10 Upgrade Cards in `UpgradePoolConfig` are balanced, modest RPG buffs. To make runs feel insanely fun and clip-worthy, add **"Screen-Breaking Mutator Cards"**:
+
+* **Examples of Viral Upgrade Cards to Add:**
+
+  * **Gigantism (`Legendary`):** Your projectiles, slashes, rock pillars, and summoned Spirit Foxes become $+100\%$ **LARGER** and deal $+40\%$ damage.
+
+  * **Echo Chamber (`Epic`):** Every `Q` ability casts **twice** with a $0.25\text{s}$ echo delay (fireballs become double fireballs; 2 Spirit Foxes become 4 Spirit Foxes!).
+
+  * **Chain Reaction (`Legendary`):** Killing any enemy triggers a miniature *Arcane Nova* explosion that chains across packs of mobs.
+
+  * **Ricochet Frenzy (`Rare`):** All attacks and projectiles bounce $+2$ additional times between platforms and enemies.
+
+  * **Golden Piñata (`Epic`):** Critical hits have a $20\%$ chance to burst enemies into a fountain of flying *Rift Dust* orbs (`flare_01` + coin burst).
+
+### 6.3 Viral Feature 3: Haven Outpost "Sacred Rift Campfire / AFK Training Sanctuary"
+
+Roblox's front-page algorithm heavily rewards **Session Length** and **Concurrent Players in Town**.
+
+* **How It Works:** Place a glowing **Sacred Rift Sanctuary Circle** in the center of Haven Outpost (near the spawn/landmarks).
+
+* When players stand inside the circle in Town, their character automatically performs rhythmic meditation/weapon-practice swings, displaying their equipped Weapon Aura and floating title while earning **passive *Rift Dust* and Weapon Mastery XP every 5 seconds** (scaled by their Rebirth tier).
+
+* **Social Multiplier:** For every other player standing in the Sanctuary Circle with you, everyone gets **+10% AFK Training Speed** (up to $+50\%$). This encourages friends to invite each other into the server just to hang out, chat, and flex their gear!
+
+### 6.4 Viral Feature 4: "Public Town Boss Invasion" Every 15 Minutes
+
+Since runs are currently solo, players never get to fight *together* in the Town Hub.
+
+* **How It Works:** Every 15 minutes in Haven Outpost, the sky turns purple for 90 seconds (`"⚠️ WORLD RIFT BREACH IN HAVEN OUTPOST!"`) and a giant **Corrupted Rift Colossus** spawns right in the Town Hub!
+
+* **Zero New Co-op Party Code Needed:** Every player currently in the Town server can whale on the Town Boss together using their equipped weapons, showing off their damage numbers and auras to everyone in the server. When defeated (or when 90s ends), everyone who dealt damage gets a shower of *Rift Dust*, *Relic Shards*, and a chance at a Relic!
+
+### 6.5 Viral Feature 5: Overhead Flex Banners & Collectible Damage Number Skins
+
+* **Overhead Town Flex Tag:** Above every player's head in Haven Outpost, display a sleek `BillboardGui` badge showing:
+
+  * `[Rebirth V ⭐] PlayerName`
+
+  * Title unlocked from achievements/codex (e.g., `"Mushroom Slayer"`, `"Star-Forge Gambler"`, `"Rift Sovereign"`)
+
+  * Their Highest Endless Room Badge (`"🔥 Best: Room 35"`).
+
+* **Damage Number Skins (`CombatVFXController`):** Add 5 unlockable Damage Number Skins (Classic Maple Orange, Neon Cyber Cyan, Golden Crit Fountain, Void Purple, Rainbow Mythic) that change the font/gradient of floating combat numbers—a massive nostalgic hook for *MapleStory* and Roblox anime fans.
+
+---
+
+## 7. Multi-Agent Research & Implementation Workflow (2 Low-Tier Sub-Agents + Main Claude)
+
+> **HOW TO RUN THIS IN CLAUDE CODE:**
+> You can tell Claude Code to spawn **2 lightweight sub-agents (`haiku` or `sonnet` via the `Task` tool)** in parallel to inspect your code and design the exact tables/math, and then have your **Main Claude Agent** implement the changes cleanly.
+
+### 7.1 Sub-Agent 1 Role: "Viral Hook & Synergy Architect" (Read-Only Sub-Agent)
+
+* **What Sub-Agent 1 Does:** Reads `WeaponConfig.luau`, `UpgradePoolConfig.luau`, `RelicConfig.luau`, and `BlacksmithScene.luau`. It designs:
+
+  1. The exact **10 new "Screen-Breaking" Upgrade Cards** (Gigantism, Echo Chamber, Chain Reaction, etc.) with balanced numbers that hook into existing `CombatService` attributes without breaking server performance.
+
+  2. The **Weapon Reforge / Enchant Aura System** (5 rarity tiers, roll odds, Dust costs, visual particle/trail specs from `AssetRegistry.VfxTextures`, and stat multipliers).
+
+* **Output:** Returns a ready-to-code Luau specification table to the Main Agent.
+
+### 7.2 Sub-Agent 2 Role: "Combat Feel, Onboarding & Balance Auditor" (Read-Only Sub-Agent)
+
+* **What Sub-Agent 2 Does:** Reads `FormulaEngine.luau`, `EnemyConfig.luau`, `CombatService.luau`, `CombatVFXController.luau`, and `Sfx.luau`. It audits:
+
+  1. **Why the player dies in 12 seconds (`B25`)** and calculates the exact HP, contact damage, and i-frame numbers for Rooms 1–10.
+
+  2. **The "Game Juice" Audit:** Identifies every exact line in `CombatVFXController.luau` and `CombatService.luau` where the 10 unused Kenney VFX textures (`slash_02`, `spark_04`, `magic_01`, `trace_02`), the 40ms crit hit-stop, and the uploaded combat sounds (`Combat_Swing1/2`, `Combat_Chop`, `Item_Drop`) should be plugged in.
+
+* **Output:** Returns an exact file-by-file patch checklist with line numbers and math replacements to the Main Agent.
+
+### 7.3 Ready-to-Paste Prompt for Claude Code (Spawning the 2 Sub-Agents + Main Builder)
+
+Copy and paste this prompt into Claude Code whenever you want to run the 2 sub-agents and execute the viral & balance upgrades:
+
+```
+Read CLAUDE.md Sections 2, 6, and 7. Before editing any code, spawn 2 parallel read-only research sub-agents (using a fast/low-tier model):
+
+1. Sub-Agent 1 (Viral & Synergy Architect): Read WeaponConfig, UpgradePoolConfig, RelicConfig, and BlacksmithScene. Design the exact data tables and implementation spec for:
+   - 10 new "Screen-Breaking" Upgrade Cards (like Gigantism, Echo Chamber double-cast, Chain Reaction, Ricochet, Golden Piñata) that make builds look explosive and viral.
+   - A Weapon Reforge / Aura Enchant rolling system in the Blacksmith (Common to Mythic 1% roll with weapon particle glow, server announcement toast, and bonus stats) + Overhead Player Flex Badges in Town (Rebirth tier + Deepest Room).
+
+2. Sub-Agent 2 (Balance & Combat Juice Auditor): Read FormulaEngine, EnemyConfig, CombatService, CombatVFXController, and Sfx. Calculate the exact number changes to fix Bug B25 (idle player dying in 12s in Room 1), balance all 8 weapons, and map out the exact lines to hook up our unused Kenney VFX textures (slash_02, spark_04, magic_01) and uploaded combat sounds (Combat_Swing1/2, Combat_Chop, Item_Drop).
+
+Once both sub-agents return their reports, review their findings as the Main Agent and implement the changes step-by-step while keeping all existing systems intact.
+
+```
