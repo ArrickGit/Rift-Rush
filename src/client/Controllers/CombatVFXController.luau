@@ -32,7 +32,9 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
 local Camera25DController = require(script.Parent:WaitForChild("Camera25DController"))
+local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
 local localPlayer = Players.LocalPlayer
 local localUserId = localPlayer.UserId
@@ -134,6 +136,9 @@ local CombatVFXController = {}
 local summonVisuals: { [number]: SummonVisual } = {}
 local orbitCoins: { [Player]: { Part } } = {}
 local swingAnims: { [Model]: number } = {} -- character -> swing start time
+local lastLocalWeapon = WeaponConfig.DEFAULT_WEAPON -- picks heavy vs light hit sounds
+local swingToggle = false -- alternates Combat_Swing1 / Combat_Swing2
+local lastHitStop = 0
 local vignette: Frame? = nil
 local fxFolder: Folder
 local numberFolder: Folder
@@ -205,6 +210,67 @@ local function addEffect(life: number, owner: number, update: (alpha: number, dt
 	return true
 end
 
+-- One-shot sprite burst from a Kenney VFX texture (AssetRegistry.VfxTextures): a ParticleEmitter on an invisible
+-- pooled anchor, emitted once and destroyed before the anchor goes back to the pool. Teammates' sprites are skipped
+-- entirely (they already render at reduced opacity as parts) to keep 4-player rooms cheap on mobile.
+local function emitSprite(texture: string, pos: Vector3, color: Color3, size: number, life: number, count: number, owner: number, speed: number?)
+	local id = AssetRegistry.VfxTextures[texture]
+	if not id or id == "" or opacityOf(owner) < 1 then
+		return
+	end
+	local anchor = acquirePart(Enum.PartType.Ball, Vector3.one * 0.2, CFrame.new(pos), color, 1)
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Texture = id
+	emitter.Color = ColorSequence.new(color)
+	emitter.LightEmission = 1
+	emitter.LightInfluence = 0
+	emitter.Rate = 0
+	emitter.Lifetime = NumberRange.new(life * 0.7, life)
+	emitter.Speed = NumberRange.new(0, speed or 0)
+	emitter.SpreadAngle = Vector2.new(180, 180)
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, size), NumberSequenceKeypoint.new(1, size * 0.25) })
+	emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+	emitter.Parent = anchor
+	emitter:Emit(count)
+	addEffect(life + 0.05, owner, function() end, function()
+		emitter:Destroy()
+		releasePart(anchor)
+	end)
+end
+
+-- Cosmetic hit-stop (crits / boss hits): the local character's animation tracks freeze for a few frames and the
+-- camera kicks. Physics and velocity are untouched, so nothing desyncs from the server.
+local function hitStop(seconds: number)
+	local now = os.clock()
+	if now - lastHitStop < 0.25 then
+		return
+	end
+	lastHitStop = now
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	if animator then
+		local frozen: { [AnimationTrack]: number } = {}
+		for _, track in animator:GetPlayingAnimationTracks() do
+			frozen[track] = track.Speed
+			track:AdjustSpeed(0)
+		end
+		task.delay(seconds, function()
+			for track, speed in frozen do
+				track:AdjustSpeed(speed)
+			end
+		end)
+	end
+	Camera25DController.Shake(0.22, seconds + 0.05)
+end
+
+-- Extra sprite layer per burst style.
+local BURST_SPRITES: { [string]: string } = {
+	Nova = "magic_03", Cinders = "fire_01", Phoenix = "flare_01", Dragon = "twirl_01", Frost = "star_06",
+	Spirit = "magic_01", Finisher = "star_04", Slam = "circle_05",
+}
+
 -- Effects ------------------------------------------------------------------------------------------------------
 
 local function spawnBurst(pos: Vector3, radius: number, style: string, owner: number)
@@ -218,6 +284,10 @@ local function spawnBurst(pos: Vector3, radius: number, style: string, owner: nu
 	end, function()
 		releasePart(part)
 	end)
+	local sprite = BURST_SPRITES[style]
+	if sprite then
+		emitSprite(sprite, pos, color, math.max(2, radius * 1.4), 0.4, 1, owner)
+	end
 end
 
 local function spawnSwing(style: string, color: Color3, pos: Vector3, facing: number, range: number, owner: number)
@@ -239,6 +309,7 @@ local function spawnSwing(style: string, color: Color3, pos: Vector3, facing: nu
 		end)
 		return
 	end
+	emitSprite("slash_02", origin + Vector3.new(facing * range * 0.5, 0, 0), color, range * 0.9, 0.18, 1, owner)
 	local part = acquirePart(Enum.PartType.Block, Vector3.new(range, 0.9, 6), CFrame.new(origin), color, throttled(0.1, opacity))
 	addEffect(0.15, owner, function(alpha: number)
 		local angle = facing * math.rad(60 - 120 * alpha)
@@ -498,6 +569,24 @@ local function showNumber(entry: { [string]: any })
 	slot.Gui.Enabled = true
 
 	local isCrit = entry.Crit == true
+	if owner == localUserId and (kind == "Hit" or kind == "Reflect") then
+		-- Local hit confirm: impact sound, spark sprite, gold star + hit-stop on crits, flare on kills.
+		local gold = Color3.fromRGB(255, 215, 70)
+		local heavy = lastLocalWeapon == "Hammer" or lastLocalWeapon == "Greatsword"
+		Sfx.Play("Combat_Chop", if isCrit then 0.7 else 0.4, (if heavy then 0.8 else 1) * (if isCrit then 1.25 else 1))
+		emitSprite(if isCrit then "spark_04" else "spark_01", pos, if isCrit then gold else Color3.new(1, 1, 1),
+			if isCrit then 4.5 else 2.2, 0.25, if isCrit then 6 else 3, owner, 12)
+		if isCrit then
+			emitSprite("star_04", pos, gold, 6, 0.35, 1, owner)
+		end
+		if entry.Kill == true then
+			emitSprite("flare_01", pos, Color3.fromRGB(255, 240, 170), 5, 0.3, 1, owner)
+			Sfx.Play("Item_Drop", 0.35, 1.2)
+		end
+		if isCrit or entry.Boss == true then
+			hitStop(if isCrit then 0.05 else 0.04)
+		end
+	end
 	local style = if isCrit then NUMBER_STYLES.Crit else (NUMBER_STYLES[kind] or NUMBER_STYLES.Hit)
 	local text = formatNumber(amount)
 	if kind == "Hurt" or kind == "Poison" then
@@ -778,6 +867,9 @@ local function handleFx(payload: any)
 		local color = if weapon then weapon.Accent else colorOf(payload.Style)
 		spawnSwing(payload.Style, color, payload.Pos, payload.Facing, payload.Range, payload.Owner)
 		startArmSwing(payload.Owner)
+		if payload.Owner ~= localUserId then
+			Sfx.Play("Combat_Swing2", 0.12) -- teammates' swings, quietly
+		end
 	elseif kind == "Proj" then
 		spawnProjectile(payload)
 		if payload.Owner ~= 0 and payload.Owner ~= localUserId and (payload.Style == "Bolt" or payload.Style == "Arrow" or payload.Style == "Card") then
@@ -796,6 +888,9 @@ local function handleFx(payload: any)
 		spawnPillar(payload.Pos, payload.HalfX, payload.Height, payload.Owner or 0)
 	elseif kind == "CardDraw" then
 		spawnCardDraw(payload.Card, payload.Pos, payload.Owner or 0)
+		if payload.Card == "Gold" and payload.Owner == localUserId then
+			Sfx.Play("Item_Drop", 0.7)
+		end
 	elseif kind == "Summon" then
 		spawnSummon(payload.Id, payload.Owner or 0, payload.Offset or Vector3.new(0, 4, 0), payload.Duration or 12)
 	elseif kind == "SummonEnd" then
@@ -831,12 +926,14 @@ local function handleFx(payload: any)
 		spawnSweep(payload.Pos, payload.HalfX, payload.Style, payload.Duration)
 	elseif kind == "Chain" then
 		spawnChain(payload.From, payload.To, payload.Owner or 0)
+		emitSprite("spark_04", payload.To, colorOf("Chain"), 3, 0.2, 5, payload.Owner or 0, 14)
 	elseif kind == "Zone" then
 		spawnZone(payload.Pos, payload.HalfX, payload.HalfY, payload.Duration, payload.Owner or 0)
 	elseif kind == "Shake" then
 		Camera25DController.Shake(payload.Intensity, payload.Duration)
 	elseif kind == "Roar" then
 		spawnBurst(payload.Pos, 22, "Roar", 0)
+		emitSprite("light_01", payload.Pos, colorOf("Roar"), 26, 0.5, 1, 0)
 	end
 end
 
@@ -849,6 +946,10 @@ function CombatVFXController.PlaySwing(weaponId: string, facing: number)
 		return
 	end
 	startArmSwing(localUserId)
+	lastLocalWeapon = weaponId
+	swingToggle = not swingToggle
+	local heavy = weaponId == "Greatsword" or weaponId == "Hammer"
+	Sfx.Play(if swingToggle then "Combat_Swing1" else "Combat_Swing2", 0.4, if heavy then 0.8 else 1)
 	local profile = weapon.Attack or WeaponConfig.GenericAttack
 	if profile.Kind ~= "Melee" then
 		return -- projectile weapons are drawn from the server's Proj event
@@ -901,6 +1002,16 @@ function CombatVFXController.Init()
 		end
 	end)
 
+	Remotes.GetEvent("RunStateChanged").OnClientEvent:Connect(function(payload: any)
+		if type(payload) ~= "table" then
+			return
+		end
+		if payload.State == "RoomCleared" or payload.State == "Anchor" then
+			Sfx.Play("Gate_Open", 0.6)
+		elseif payload.State == "ChestOpened" then
+			Sfx.Play("Item_Drop", 0.7)
+		end
+	end)
 	Remotes.GetEvent("CombatFx").OnClientEvent:Connect(handleFx)
 	Remotes.GetEvent("DamageNumber").OnClientEvent:Connect(function(batch: any)
 		if type(batch) ~= "table" then

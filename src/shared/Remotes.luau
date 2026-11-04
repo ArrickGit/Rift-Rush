@@ -23,7 +23,7 @@ local EVENTS = {
 	"CombatAttack", -- C->S: (slot: "Basic" | "Ability1", facing: -1 | 1) intent; the server decides everything else
 	"CombatDash", -- C->S: (direction: -1 | 1) dash intent; grants i-frames if the server has a charge
 	"CombatFx", -- S->C: projectile / telegraph / burst / shake cosmetics for the run's players
-	"DamageNumber", -- S->C: batched damage numbers { Pos, Amount, Crit, Lines, Kind, Owner }
+	"DamageNumber", -- S->C: batched damage numbers { Pos, Amount, Crit, Lines, Kind, Owner, Boss?, Kill? }
 	"Notify", -- S->C: toast message
 	"LoadoutAction", -- C->S: { Action, ... } Blacksmith unlocks, weapon / Link Skill / Starting Relic equips (InventoryService)
 	"StarForce", -- C->S: { Relic, Safeguard } one Star-Force attempt at the Star-Forge (RelicService)

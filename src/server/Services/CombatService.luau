@@ -633,6 +633,8 @@ local function damageEnemy(enemy: EnemyState, amount: number, source: Player?, o
 		Lines = options.Lines,
 		Kind = options.Kind or "Hit",
 		Owner = if source then source.UserId else 0,
+		Boss = enemy.Kind == "Boss", -- client juice: hit-stop on boss hits
+		Kill = enemy.HP <= 0, -- client juice: kill flare + drop sound
 	})
 
 	if enemy.HP <= 0 then

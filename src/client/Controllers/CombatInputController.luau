@@ -20,6 +20,7 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 local Movement25DController = require(script.Parent:WaitForChild("Movement25DController"))
 local CombatVFXController = require(script.Parent:WaitForChild("CombatVFXController"))
+local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
 local ATTACK_ACTION = "RiftAttack"
 local ABILITY_ACTION = "RiftAbility1"
@@ -115,8 +116,14 @@ function CombatInputController.PressAbility()
 	tryAbility()
 end
 
+local profileSeen = false -- the first snapshot on join must not play the equip sound
+
 local function applyProfile(profile: any)
 	if type(profile) == "table" and type(profile.EquippedWeapon) == "string" then
+		if profileSeen and profile.EquippedWeapon ~= equippedWeapon then
+			Sfx.Play("Weapon_Equip", 0.5)
+		end
+		profileSeen = true
 		equippedWeapon = profile.EquippedWeapon
 	end
 end
