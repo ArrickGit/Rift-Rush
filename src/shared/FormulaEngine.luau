@@ -31,6 +31,7 @@ export type DamageParams = {
 	CritDamageMult: number,
 	LimitBreakerLv: number,
 	PartyHostBaselinePower: number?,
+	ReforgeDmg: number?, -- Weapon Reforge tier bonus (ReforgeConfig), an account-side multiplier like relics
 }
 
 local FormulaEngine = {}
@@ -117,7 +118,8 @@ function FormulaEngine.CalculateHitDamage(p: DamageParams, rng: Random?): (numbe
 	end
 
 	local relicBoosted = p.RelicDmgBonus * (1 + 0.10 * p.RelicResonanceLv)
-	local accountMult = 1 + p.LinkSkillDmgBonus + relicBoosted
+	local reforge = if p.IsPureRun then 0 else (p.ReforgeDmg or 0)
+	local accountMult = (1 + p.LinkSkillDmgBonus + relicBoosted) * (1 + reforge)
 
 	local comboBonus = math.min(0.50, math.floor(p.ComboCount / 10) * 0.01)
 	local runBuildMult = (1 + p.RunAdditiveBonus + comboBonus) * math.max(0.1, p.CurseDmgMultiplier)

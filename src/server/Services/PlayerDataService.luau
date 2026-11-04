@@ -24,6 +24,8 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 
 export type MasteryEntry = { Level: number, XP: number, ParagonRank: number }
+-- Weapon Reforge (ReforgeConfig): the applied tier, roll count, pity counters and an un-kept new roll.
+export type ReforgeEntry = { Tier: string?, Rolls: number, PityEpic: number, PityLegend: number, Pending: string? }
 
 export type PlayerProfileData = {
 	HunterLevel: number,
@@ -43,6 +45,7 @@ export type PlayerProfileData = {
 	EquippedWeapon: string,
 	UnlockedWeapons: { [string]: boolean }, -- false = owned but switched off by a Standard rebirth
 	WeaponMastery: { [string]: MasteryEntry },
+	WeaponReforge: { [string]: ReforgeEntry }, -- [WeaponId] = reforge state (game.md 7.4 B)
 	ActiveLinkSkills: { string },
 	UnlockedWorlds: { [number]: number }, -- [WorldIndex] = HighestCorruptionTierUnlocked
 	AscensionNodes: { [string]: number }, -- [NodeId] = Level
@@ -116,6 +119,7 @@ local function newDefaultProfile(): PlayerProfileData
 		EquippedWeapon = WeaponConfig.DEFAULT_WEAPON,
 		UnlockedWeapons = unlocked,
 		WeaponMastery = mastery,
+		WeaponReforge = {},
 		ActiveLinkSkills = {},
 		UnlockedWorlds = { [1] = 0 },
 		AscensionNodes = {},
@@ -138,7 +142,7 @@ end
 -- Fill in any key missing from `data` using `defaults`, recursing into plain dictionaries only.
 -- Arrays and keyed collections (UnlockedWeapons, RelicStars, ...) keep whatever the player has.
 local DICT_KEYS_NO_RECURSE: { [string]: boolean } = {
-	UnlockedWeapons = true, WeaponMastery = true, ActiveLinkSkills = true, UnlockedWorlds = true,
+	UnlockedWeapons = true, WeaponMastery = true, WeaponReforge = true, ActiveLinkSkills = true, UnlockedWorlds = true,
 	AscensionNodes = true, RelicStars = true, EquippedStartingRelics = true,
 	PendingSkipCredits = true, ProcessedReceipts = true, Stats = true,
 	Daily = true, Progress = true, Claimed = true,

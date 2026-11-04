@@ -32,6 +32,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local FormulaEngine = require(Shared:WaitForChild("FormulaEngine"))
 local Physics25D = require(Shared:WaitForChild("Physics25D"))
+local ReforgeConfig = require(Shared:WaitForChild("ReforgeConfig"))
 local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local RoomAsciiTemplates = require(Shared:WaitForChild("RoomAsciiTemplates"))
@@ -174,7 +175,8 @@ type AttackCtx = {
 	BossBonus: number,
 	ForceCrit: boolean,
 	Relics: { [string]: number }, -- active relic id -> stars
-	Size: number, -- Gigantism: scales hitboxes, projectiles, pillars and blasts
+	Reforge: ReforgeConfig.Tier?, -- the equipped weapon's Reforge tier (Blacksmith)
+	Size: number, -- Gigantism x Rift Sovereign reforge: scales hitboxes, projectiles, pillars and blasts
 	SkillScale: number, -- multiplies every SkillMultiplier (Echo Chamber recasts, Afterimage phantoms)
 	Phantom: boolean, -- an Afterimage repeat: no finisher count, shield, bell focus or momentum
 }
@@ -323,6 +325,10 @@ local CARD = {
 	BARRAGE_STYLES = { "Fireball", "Lightning", "Poison", "Bolt", "Spirit" },
 	CDR_MAX = 0.6,
 	CDR_FLOOR = 0.75, -- seconds
+	-- Void-Touched reforge (ReforgeConfig Extra): extra shots / slash waves per basic attack
+	WAVE_MULT = 0.6,
+	WAVE_SPEED = 60,
+	WAVE_FAN_DEG = 8,
 }
 
 -- Ascension Shop node ids (Section 23)
@@ -465,6 +471,12 @@ local function getWeapon(profile: PlayerProfileData): WeaponInfo
 	return WeaponConfig.Weapons[profile.EquippedWeapon] or WeaponConfig.Weapons[WeaponConfig.DEFAULT_WEAPON]
 end
 
+-- Attack size: Gigantism cards x the Rift Sovereign reforge, capped. Also published as the SizeScale attribute.
+local function runSize(mods: { [string]: number }, profile: PlayerProfileData): number
+	local reforge = ReforgeConfig.ForWeapon(profile.WeaponReforge, getWeapon(profile).Id)
+	return math.min(CARD.SIZE_MAX, (1 + (mods.SizeMult or 0)) * (1 + (if reforge then reforge.Size else 0)))
+end
+
 local function linkBonus(profile: PlayerProfileData, stat: string): number
 	return RunManagerService.GetLinkBonus(profile, stat)
 end
@@ -518,7 +530,8 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 	}
 	player:SetAttribute("Combo", 0)
 	player:SetAttribute("Shield", nil)
-	player:SetAttribute("SizeScale", nil) -- Gigantism (client swing prediction + projectile visuals)
+	local size = runSize(pc.Mods, profile) -- Gigantism / Mythic reforge (client swing prediction + projectile visuals)
+	player:SetAttribute("SizeScale", if size > 1 then size else nil)
 	player:SetAttribute("RunBlades", nil) -- Whirling Blades count (client draws the orbit)
 	return pc
 end
@@ -553,7 +566,9 @@ end
 local function makeParams(profile: PlayerProfileData, weapon: WeaponInfo, pc: PlayerCombat?): DamageParams
 	local mastery = profile.WeaponMastery[weapon.Id]
 	local mods: { [string]: number } = if pc then pc.Mods else {}
+	local reforge = ReforgeConfig.ForWeapon(profile.WeaponReforge, weapon.Id)
 	return {
+		ReforgeDmg = if reforge then reforge.Dmg else 0,
 		WeaponBaseDmg = weapon.BaseDamage,
 		HunterLevel = profile.HunterLevel,
 		LegacyBonusLevels = profile.LegacyBonusLevels,
@@ -606,6 +621,7 @@ local function makeAttackCtx(player: Player): AttackCtx?
 	local tooth = relics.REL_02
 	params.RelicDmgBonus = if tooth then pc.ToothStacks * RelicConfig.Value("REL_02", tooth).PerStack else 0
 	params.CurseDmgMultiplier = RunManagerService.GetCurseMods(player).DmgMult
+	local reforge = ReforgeConfig.ForWeapon(profile.WeaponReforge, weapon.Id)
 	return {
 		Player = player,
 		PC = pc,
@@ -614,12 +630,13 @@ local function makeAttackCtx(player: Player): AttackCtx?
 		RunId = pc.RunId,
 		Params = params,
 		Mods = mods,
-		CritRate = BASE_CRIT_RATE + (mods.CritRate or 0) + linkBonus(profile, "CritRate"),
+		CritRate = BASE_CRIT_RATE + (mods.CritRate or 0) + linkBonus(profile, "CritRate") + (if reforge then reforge.Crit else 0),
 		NormalBonus = linkBonus(profile, "NormalEliteDamage"),
 		BossBonus = linkBonus(profile, "BossDamage"),
 		ForceCrit = false,
 		Relics = relics,
-		Size = math.min(CARD.SIZE_MAX, 1 + (mods.SizeMult or 0)),
+		Reforge = reforge,
+		Size = runSize(mods, profile),
 		SkillScale = 1,
 		Phantom = false,
 	}
@@ -645,7 +662,7 @@ end
 
 local function attackInterval(ctx: AttackCtx): number
 	local speed = 1 + (ctx.Mods.AttackSpeed or 0) + linkBonus(ctx.Profile, "AttackSpeedCooldown")
-		+ RunManagerService.GetCurseMods(ctx.Player).AttackSpeed
+		+ RunManagerService.GetCurseMods(ctx.Player).AttackSpeed + (if ctx.Reforge then ctx.Reforge.AtkSpeed else 0)
 	if os.clock() < ctx.PC.MomentumUntil then
 		speed += MOMENTUM_ATTACK_SPEED
 	end
@@ -1555,6 +1572,34 @@ local function doProjectileAttack(ctx: AttackCtx, profile: AttackProfile, facing
 	})
 end
 
+-- Void-Touched reforge: every basic attack also fires `extra` angled shots (ranged) or piercing slash waves (melee).
+local function reforgeWaves(ctx: AttackCtx, profile: AttackProfile, facing: number, root: BasePart, extra: number)
+	local size = ctx.Size
+	for index = 1, extra do
+		local sign = if index % 2 == 0 then -1 else 1
+		local angle = math.rad(CARD.WAVE_FAN_DEG * math.ceil(index / 2) * sign)
+		if profile.Kind == "Projectile" then
+			local speed = profile.Speed or 70
+			local half = (profile.HalfSize or 1.4) * size
+			newProjectile({
+				Team = "Player", RunId = ctx.RunId, Pos = root.Position + Vector3.new(facing * 2, 0.5, 0),
+				Vel = Vector3.new(facing * math.cos(angle), math.sin(angle), 0) * speed, HalfX = half, HalfY = half,
+				Life = profile.Range / speed, Style = profile.Style, Owner = ctx.Player,
+				SkillMult = profile.Mult * CARD.WAVE_MULT * ctx.SkillScale, Pierce = profile.Pierce == true,
+				Bounces = (profile.Bounces or 0) + (ctx.Mods.Ricochet or 0), Scale = size,
+			})
+		else
+			local reach = profile.Range * (1 + (ctx.Mods.RangeMult or 0)) * size
+			newProjectile({
+				Team = "Player", RunId = ctx.RunId, Pos = root.Position + Vector3.new(facing * 2, 0, 0),
+				Vel = Vector3.new(facing * CARD.WAVE_SPEED, 0, 0), HalfX = 0.6 * size, HalfY = profile.Height * size,
+				Life = reach * 1.8 / CARD.WAVE_SPEED, Style = "Wave", Owner = ctx.Player,
+				SkillMult = profile.Mult * CARD.WAVE_MULT * ctx.SkillScale, Pierce = true, Scale = size,
+			})
+		end
+	end
+end
+
 -- Trick Cards passive (Loaded Deck): Red = Burn blast, Blue = -2s Q cooldown, Gold = bonus Rift Dust.
 local function drawCard(ctx: AttackCtx, root: BasePart)
 	local roll = rng:NextInteger(1, 3)
@@ -1927,6 +1972,9 @@ local function onAttack(player: Player, slot: any, facingInput: any)
 		else
 			doMeleeAttack(ctx, profile, facing, root)
 		end
+		if ctx.Reforge and ctx.Reforge.Extra > 0 then
+			reforgeWaves(ctx, profile, facing, root, ctx.Reforge.Extra)
+		end
 		if ctx.Weapon.Id == "TrickCards" then
 			pc.DeckCount += 1
 			if pc.DeckCount % DECK_EVERY == 0 then
@@ -2050,7 +2098,8 @@ local function tickPeriodics(now: number)
 
 		if bolts > 0 and now >= pc.BarrageAt and #enemiesInRadius(runId, x, y, CARD.BARRAGE_RANGE, nil) > 0 then
 			pc.BarrageAt = now + CARD.BARRAGE_EVERY
-			local size = math.min(CARD.SIZE_MAX, 1 + (pc.Mods.SizeMult or 0))
+			local profile = PlayerDataService.Get(player)
+			local size = if profile then runSize(pc.Mods, profile) else 1
 			local origin = Vector3.new(x, y + 0.5, 0)
 			local styles = CARD.BARRAGE_STYLES
 			for index = 1, bolts do
@@ -2206,7 +2255,7 @@ local function applyUpgrade(pc: PlayerCombat, card: Upgrade)
 		local interval = 1 / (weapon.AttacksPerSecond * (1 + (pc.Mods.AttackSpeed or 0)))
 		pc.Player:SetAttribute("AttackInterval", interval)
 	end
-	local size = math.min(CARD.SIZE_MAX, 1 + (pc.Mods.SizeMult or 0))
+	local size = if profile then runSize(pc.Mods, profile) else 1
 	pc.Player:SetAttribute("SizeScale", if size > 1 then size else nil)
 	local blades = math.min(CARD.BLADES_MAX, pc.Mods.OrbitBlades or 0)
 	pc.Player:SetAttribute("RunBlades", if blades > 0 then blades else nil)

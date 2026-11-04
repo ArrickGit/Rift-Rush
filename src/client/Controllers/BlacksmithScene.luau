@@ -3,6 +3,7 @@
 -- The Blacksmith window drawn as a weapon rack: the 8 weapons hang on a wooden wall (never-forged ones are black
 -- silhouettes, switched-off ones are grey), and tapping one shows its detail card: a big icon, damage / speed / Q
 -- chips, the passive, and one action (Forge, Reactivate, Equip). A freshly forged weapon flares into colour.
+-- Owned weapons also get the Rift Reforge panel (ReforgeSection) under the card.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -10,6 +11,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
+local ReforgeSection = require(script.Parent:WaitForChild("ReforgeSection"))
 local SceneKit = require(script.Parent:WaitForChild("SceneKit"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
@@ -344,6 +346,9 @@ local function renderBlacksmith()
 	header(1)
 	rack(2, equipped)
 	detailCard(3, selectedId, equipped)
+	if weaponState(selectedId) == "Owned" then
+		ReforgeSection.Render(4, selectedId, costChip)
+	end
 	lastEquipped = equipped
 end
 
@@ -352,6 +357,7 @@ BlacksmithScene.Render = renderBlacksmith
 function BlacksmithScene.Init(kit: any)
 	K = kit
 	loadoutRemote = Remotes.GetEvent("LoadoutAction")
+	ReforgeSection.Init(kit)
 end
 
 return BlacksmithScene

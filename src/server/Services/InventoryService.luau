@@ -8,11 +8,15 @@
 --   UnequipLink { Link }
 --   EquipRelic { Relic }   carry an owned Relic into every run from Room 1 (Starting Relic slots)
 --   UnequipRelic { Relic }
+--   Reforge { Weapon }     Blacksmith: pay Dust + 1 Boss Core to roll a ReforgeConfig tier. The first roll applies;
+--                          later rolls wait in Pending until ReforgeKeep / ReforgeDiscard { Weapon }. A Mythic roll
+--                          is announced to the whole server (Celebrate Kind "Mythic").
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local ReforgeConfig = require(Shared:WaitForChild("ReforgeConfig"))
 local RelicConfig = require(Shared:WaitForChild("RelicConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
@@ -30,7 +34,13 @@ local NODE_TWIN_VESSEL = "AS_T3_03"
 local NODE_LEGION_COMMANDER = "AS_T3_04"
 
 local notifyRemote: RemoteEvent
+local celebrateRemote: RemoteEvent
 local lastAction: { [Player]: number } = {}
+local rng = Random.new()
+
+-- Fired after a reforge changes what a player shows off (FlexBadgeService listens).
+local reforgedEvent = Instance.new("BindableEvent")
+InventoryService.Reforged = reforgedEvent.Event :: RBXScriptSignal
 
 local function notify(player: Player, message: string)
 	notifyRemote:FireClient(player, message)
@@ -156,6 +166,95 @@ local function equipRelic(player: Player, profile: PlayerProfileData, relicId: s
 	return nil
 end
 
+local function reforgeEntryOf(data: PlayerProfileData, weaponId: string): PlayerDataService.ReforgeEntry
+	local entry = data.WeaponReforge[weaponId]
+	if not entry then
+		entry = { Tier = nil, Rolls = 0, PityEpic = 0, PityLegend = 0, Pending = nil }
+		data.WeaponReforge[weaponId] = entry
+	end
+	return entry
+end
+
+local function announceRoll(player: Player, info: WeaponConfig.WeaponInfo, tier: ReforgeConfig.Tier)
+	local title = ("%s %s"):format(tier.Name, info.Name)
+	if tier.Id == "Mythic" then
+		celebrateRemote:FireAllClients({
+			Kind = "Mythic", Icon = tier.Icon, Color = tier.Color, Forger = player.UserId,
+			Title = "MYTHIC FORGED!",
+			Body = ("🔥 %s just forged a MYTHIC [%s] (1 in 100)!"):format(player.DisplayName, title),
+		})
+	elseif tier.Id == "Legendary" then
+		celebrateRemote:FireClient(player, { Kind = "Reforge", Icon = tier.Icon, Color = tier.Color,
+			Title = "Legendary Reforge!", Body = title })
+	else
+		notify(player, ("%s %s · %s"):format(tier.Icon, tier.Id, title))
+	end
+end
+
+-- Blacksmith reforge roll: the first roll applies, later ones wait for Keep / Discard.
+local function reforgeWeapon(player: Player, profile: PlayerProfileData, weaponId: string): string?
+	local info = WeaponConfig.Weapons[weaponId]
+	if not info or profile.UnlockedWeapons[weaponId] ~= true then
+		return "Forge that weapon before reforging it"
+	end
+	local current = profile.WeaponReforge[weaponId]
+	if current and current.Pending then
+		return "Keep or discard your last roll first"
+	end
+	local dust = ReforgeConfig.Cost(info.UnlockCost)
+	if profile.RiftDust < dust or profile.BossCores < ReforgeConfig.CORE_COST then
+		return ("Need %d Rift Dust and %d Boss Core"):format(dust, ReforgeConfig.CORE_COST)
+	end
+	local rolled: ReforgeConfig.Tier? = nil
+	local applied = false
+	PlayerDataService.Mutate(player, function(data)
+		data.RiftDust -= dust
+		data.BossCores -= ReforgeConfig.CORE_COST
+		local entry = reforgeEntryOf(data, weaponId)
+		local tier = ReforgeConfig.Roll(rng, entry)
+		entry.Rolls += 1
+		if entry.Tier == nil then
+			entry.Tier = tier.Id
+			applied = true
+		else
+			entry.Pending = tier.Id
+		end
+		if tier.Id == "Mythic" then
+			data.Stats.MythicReforges = (data.Stats.MythicReforges or 0) + 1
+		end
+		rolled = tier
+	end)
+	if rolled then
+		announceRoll(player, info, rolled)
+	end
+	if applied then
+		WeaponHoldService.Refresh(player)
+		reforgedEvent:Fire(player)
+	end
+	return nil
+end
+
+local function resolveReforge(player: Player, profile: PlayerProfileData, weaponId: string, keepNew: boolean): string?
+	local entry = profile.WeaponReforge[weaponId]
+	if not entry or not entry.Pending then
+		return nil
+	end
+	PlayerDataService.Mutate(player, function(data)
+		local live = data.WeaponReforge[weaponId]
+		if live and live.Pending then
+			if keepNew then
+				live.Tier = live.Pending
+			end
+			live.Pending = nil
+		end
+	end)
+	if keepNew then
+		WeaponHoldService.Refresh(player)
+		reforgedEvent:Fire(player)
+	end
+	return nil
+end
+
 local function removeFrom(player: Player, field: "ActiveLinkSkills" | "EquippedStartingRelics", id: string)
 	PlayerDataService.Mutate(player, function(data)
 		local list = data[field]
@@ -196,6 +295,10 @@ local function onAction(player: Player, payload: any)
 		err = equipRelic(player, profile, payload.Relic)
 	elseif action == "UnequipRelic" and type(payload.Relic) == "string" then
 		removeFrom(player, "EquippedStartingRelics", payload.Relic)
+	elseif action == "Reforge" and type(payload.Weapon) == "string" then
+		err = reforgeWeapon(player, profile, payload.Weapon)
+	elseif (action == "ReforgeKeep" or action == "ReforgeDiscard") and type(payload.Weapon) == "string" then
+		err = resolveReforge(player, profile, payload.Weapon, action == "ReforgeKeep")
 	end
 	if err then
 		notify(player, err)
@@ -205,6 +308,7 @@ end
 function InventoryService.Init()
 	Remotes.Init()
 	notifyRemote = Remotes.GetEvent("Notify")
+	celebrateRemote = Remotes.GetEvent("Celebrate")
 	Remotes.GetEvent("LoadoutAction").OnServerEvent:Connect(onAction)
 
 	-- Slot counts depend on Ascension nodes and passes; re-check whenever the profile loads or a pass changes.

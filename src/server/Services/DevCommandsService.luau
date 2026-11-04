@@ -7,6 +7,7 @@
 --   { Cmd = "Mastery", Weapon = "Bow", Level = 10 }
 --   { Cmd = "GiveUpgrade", Id = "Gigantism" }      adds one stack of a run card (must be inside a run)
 --   { Cmd = "StartRun", World = 1, Corruption = 0 } solo run, as if through the Rift Gate
+--   { Cmd = "Reforge", Weapon = "Bow", Tier = "Mythic" } sets a weapon's reforge tier directly (Tier = nil clears it)
 -- The first player in the server is the target unless Player = <name> is given.
 
 local Players = game:GetService("Players")
@@ -64,6 +65,15 @@ local function run(request: any): string
 		if not CombatService.GiveUpgrade(player, request.Id) then
 			return "not in a run, or unknown upgrade id"
 		end
+	elseif cmd == "Reforge" and type(request.Weapon) == "string" then
+		PlayerDataService.Mutate(player, function(data)
+			local entry: PlayerDataService.ReforgeEntry = data.WeaponReforge[request.Weapon]
+				or { Tier = nil, Rolls = 0, PityEpic = 0, PityLegend = 0, Pending = nil }
+			entry.Tier = if type(request.Tier) == "string" then request.Tier else nil
+			entry.Pending = nil
+			data.WeaponReforge[request.Weapon] = entry
+		end)
+		WeaponHoldService.Refresh(player)
 	elseif cmd == "StartRun" then
 		local ok, message = RunManagerService.StartRun({ player }, tonumber(request.World) or 1, tonumber(request.Corruption) or 0)
 		if not ok then

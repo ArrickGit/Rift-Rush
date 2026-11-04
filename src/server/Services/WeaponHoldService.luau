@@ -7,11 +7,15 @@
 -- longest side is scaled to WeaponConfig Hold.Length and laid along the hand's forward axis, tilted by Hold.Tilt;
 -- its thinnest side faces the hand's X axis so blades show their flat to the side-on camera. The hand closes
 -- Hold.Grip of the way along the long side. Paragon 25 / 50 / 100 weapons get a glowing aura (Section 6.1).
+-- Reforged weapons (ReforgeConfig, game.md 7.4 B) add tier emitters (`ReforgeFx_*`): Common sheen, Rare lightning,
+-- Epic void trail, Legendary gold glow + halo & wings on the character, Mythic crimson fire + crimson halo & wings.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local AssetRegistry = require(Shared:WaitForChild("AssetRegistry"))
+local ReforgeConfig = require(Shared:WaitForChild("ReforgeConfig"))
 local WeaponConfig = require(Shared:WaitForChild("WeaponConfig"))
 local PlayerDataService = require(script.Parent:WaitForChild("PlayerDataService"))
 
@@ -20,6 +24,8 @@ type WeaponInfo = WeaponConfig.WeaponInfo
 local WeaponHoldService = {}
 
 local HELD_NAME = "HeldWeapon"
+local AURA_NAME = "ReforgeAura" -- halo & wings model on the character (Legendary / Mythic)
+local Vfx = AssetRegistry.VfxTextures
 local DEFAULT_TILT = -30 -- tip forward and a little down: the classic ready stance seen from the side
 local AURA_TIERS = { { Rank = 100, Rate = 40, Size = 0.5 }, { Rank = 50, Rate = 22, Size = 0.4 }, { Rank = 25, Rate = 12, Size = 0.3 } }
 
@@ -109,6 +115,16 @@ local function axisVector(index: number): Vector3
 	return if index == 1 then Vector3.xAxis elseif index == 2 then Vector3.yAxis else Vector3.zAxis
 end
 
+local function biggestPart(model: Model): BasePart?
+	local biggest: BasePart? = nil
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") and (biggest == nil or descendant.Size.Magnitude > biggest.Size.Magnitude) then
+			biggest = descendant
+		end
+	end
+	return biggest
+end
+
 local function addAura(model: Model, info: WeaponInfo, paragon: number)
 	local tier = nil
 	for _, candidate in AURA_TIERS do
@@ -120,12 +136,7 @@ local function addAura(model: Model, info: WeaponInfo, paragon: number)
 	if not tier then
 		return
 	end
-	local biggest: BasePart? = nil
-	for _, descendant in model:GetDescendants() do
-		if descendant:IsA("BasePart") and (biggest == nil or descendant.Size.Magnitude > biggest.Size.Magnitude) then
-			biggest = descendant
-		end
-	end
+	local biggest = biggestPart(model)
 	if not biggest then
 		return
 	end
@@ -147,8 +158,138 @@ local function addAura(model: Model, info: WeaponInfo, paragon: number)
 	light.Parent = biggest
 end
 
+local function reforgeEmitter(part: BasePart, texture: string, color: Color3, rate: number, size: number, life: number, speed: number)
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Name = "ReforgeFx_" .. texture
+	emitter.Texture = Vfx[texture] or ""
+	emitter.Color = ColorSequence.new(color)
+	emitter.LightEmission = 1
+	emitter.LightInfluence = 0
+	emitter.Rate = rate
+	emitter.Lifetime = NumberRange.new(life * 0.6, life)
+	emitter.Speed = NumberRange.new(speed * 0.4, speed)
+	emitter.SpreadAngle = Vector2.new(180, 180)
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = NumberRange.new(-90, 90)
+	emitter.Size = NumberSequence.new(size, 0)
+	emitter.Transparency = NumberSequence.new(0.15, 1)
+	emitter.Parent = part
+end
+
+-- Tier emitters on the held weapon's biggest part (plus a trail for Epic and a Highlight for Legendary+).
+local function addReforgeFx(model: Model, tier: ReforgeConfig.Tier)
+	local part = biggestPart(model)
+	if not part then
+		return
+	end
+	local color = tier.Color
+	local rank = ReforgeConfig.Rank(tier.Id)
+	if tier.Id == "Common" then
+		reforgeEmitter(part, "spark_01", color, 4, 0.35, 0.5, 0.5)
+	elseif tier.Id == "Rare" then
+		reforgeEmitter(part, "spark_04", color, 14, 0.6, 0.25, 2)
+	elseif tier.Id == "Epic" then
+		reforgeEmitter(part, "magic_01", color, 10, 0.7, 0.8, 0.6)
+		local size = part.Size
+		local axis = if size.X >= size.Y and size.X >= size.Z then Vector3.xAxis elseif size.Y >= size.Z then Vector3.yAxis else Vector3.zAxis
+		local half = math.max(size.X, size.Y, size.Z) * 0.45
+		local a0 = Instance.new("Attachment")
+		a0.Position = -axis * half
+		a0.Parent = part
+		local a1 = Instance.new("Attachment")
+		a1.Position = axis * half
+		a1.Parent = part
+		local trail = Instance.new("Trail")
+		trail.Name = "ReforgeFx_trace_02"
+		trail.Attachment0 = a0
+		trail.Attachment1 = a1
+		trail.Texture = Vfx.trace_02 or ""
+		trail.Color = ColorSequence.new(color)
+		trail.LightEmission = 1
+		trail.Lifetime = 0.35
+		trail.FaceCamera = true
+		trail.Transparency = NumberSequence.new(0.2, 1)
+		trail.Parent = part
+	elseif tier.Id == "Legendary" then
+		reforgeEmitter(part, "magic_01", color, 12, 0.8, 0.8, 0.8)
+		reforgeEmitter(part, "star_06", color, 6, 0.6, 0.9, 1.2)
+	else -- Mythic
+		reforgeEmitter(part, "fire_01", color, 18, 0.9, 0.6, 1.5)
+		reforgeEmitter(part, "star_06", Color3.fromRGB(255, 200, 120), 8, 0.7, 0.8, 1.5)
+	end
+	if rank >= ReforgeConfig.Rank("Rare") then
+		local light = Instance.new("PointLight")
+		light.Name = "ReforgeFx_Light"
+		light.Color = color
+		light.Range = 5 + rank * 1.5
+		light.Brightness = 1 + rank * 0.3
+		light.Parent = part
+	end
+	if rank >= ReforgeConfig.Rank("Legendary") then
+		local highlight = Instance.new("Highlight")
+		highlight.Name = "ReforgeFx_Highlight"
+		highlight.FillColor = color
+		highlight.FillTransparency = 0.65
+		highlight.OutlineColor = color
+		highlight.OutlineTransparency = 0.1
+		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+		highlight.Parent = model
+	end
+end
+
+-- Legendary / Mythic: a bead halo over the head and neon wings on the back, welded to the character.
+local function buildHaloWings(character: Model, color: Color3)
+	local head = character:FindFirstChild("Head")
+	local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+	local aura = Instance.new("Model")
+	aura.Name = AURA_NAME
+	local function piece(anchor: BasePart, size: Vector3, cframe: CFrame, shape: Enum.PartType, transparency: number): Part
+		local part = Instance.new("Part")
+		part.Shape = shape
+		part.Size = size
+		part.CFrame = cframe
+		part.Color = color
+		part.Material = Enum.Material.Neon
+		part.Transparency = transparency
+		part.Anchored = false
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.Massless = true
+		part.CastShadow = false
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = anchor
+		weld.Part1 = part
+		weld.Parent = part
+		part.Parent = aura
+		return part
+	end
+	if head and head:IsA("BasePart") then
+		local beads = 12
+		for index = 1, beads do
+			local angle = index / beads * math.pi * 2
+			piece(head, Vector3.one * 0.2, head.CFrame * CFrame.new(math.cos(angle) * 0.75, head.Size.Y / 2 + 0.5, math.sin(angle) * 0.75),
+				Enum.PartType.Ball, 0.1)
+		end
+	end
+	if torso and torso:IsA("BasePart") then
+		for side = -1, 1, 2 do
+			for feather = 1, 3 do
+				-- Local +Z is the character's back; feathers fan up and out behind the shoulders.
+				local cframe = torso.CFrame * CFrame.new(side * 0.4, 0.6 + feather * 0.3, 0.7 + feather * 0.55)
+					* CFrame.Angles(math.rad(-25 - feather * 16), 0, side * math.rad(18))
+				local wing = piece(torso, Vector3.new(0.14, 3 - feather * 0.45, 0.8), cframe, Enum.PartType.Block, 0.3)
+				if feather == 1 then
+					reforgeEmitter(wing, "star_06", color, 3, 0.35, 1, 0.6)
+				end
+			end
+		end
+	end
+	aura.Parent = character
+end
+
 -- Builds the held model and welds it to `hand`.
-local function attach(character: Model, hand: BasePart, info: WeaponInfo, paragon: number)
+local function attach(character: Model, hand: BasePart, info: WeaponInfo, paragon: number, reforge: ReforgeConfig.Tier?)
 	local model = getPrefab(info)
 	model.Name = HELD_NAME
 	model:SetAttribute("WeaponId", info.Id)
@@ -206,6 +347,12 @@ local function attach(character: Model, hand: BasePart, info: WeaponInfo, parago
 	end
 	model.PrimaryPart = nil
 	addAura(model, info, paragon)
+	if reforge then
+		addReforgeFx(model, reforge)
+		if ReforgeConfig.Rank(reforge.Id) >= ReforgeConfig.Rank("Legendary") then
+			buildHaloWings(character, reforge.Color)
+		end
+	end
 	model.Parent = character
 end
 
@@ -223,7 +370,9 @@ function WeaponHoldService.Refresh(player: Player)
 	end
 	local mastery = profile.WeaponMastery[info.Id]
 	local paragon = if mastery then mastery.ParagonRank else 0
-	local key = ("%s:%d"):format(info.Id, if paragon >= 100 then 3 elseif paragon >= 50 then 2 elseif paragon >= 25 then 1 else 0)
+	local reforge = ReforgeConfig.ForWeapon(profile.WeaponReforge, info.Id)
+	local key = ("%s:%d:%s"):format(info.Id, if paragon >= 100 then 3 elseif paragon >= 50 then 2 elseif paragon >= 25 then 1 else 0,
+		if reforge then reforge.Id else "-")
 	local existing = character:FindFirstChild(HELD_NAME)
 	if existing and heldKey[player] == key then
 		return
@@ -231,9 +380,13 @@ function WeaponHoldService.Refresh(player: Player)
 	if existing then
 		existing:Destroy()
 	end
+	local oldAura = character:FindFirstChild(AURA_NAME)
+	if oldAura then
+		oldAura:Destroy()
+	end
 	heldKey[player] = key
 	local ok, err = pcall(function(): any
-		attach(character, hand, info, paragon)
+		attach(character, hand, info, paragon, reforge)
 		return nil
 	end)
 	if not ok then

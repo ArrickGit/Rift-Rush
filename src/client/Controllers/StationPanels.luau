@@ -4,8 +4,9 @@
 -- Board (StationScenes), the Star-Forge (StarForgeScene), the Blacksmith (BlacksmithScene), the Legion Hall
 -- (LegionScene), the Hall of Champions (HallScene), the Rebirth pedestal (RebirthScene), the Bag (BagScene) and
 -- the Central Rift Gate (RiftGateScene), plus the Settings & Credits screen (SettingsScene).
--- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards) and the HUD's
--- run relic / curse line.
+-- Also the centre-screen Celebrate banner (new relics, Mastery levels / Link Skills, quest rewards, reforges) and
+-- the HUD's run relic / curse line. A Mythic reforge (Kind "Mythic", sent to the whole server) also posts a chat
+-- system message, and flashes the screen for the player who forged it.
 --
 -- UIController owns the window and passes its drawing helpers in as a kit (Init); scenes draw into kit.content()
 -- and every button fires a validated remote (LoadoutAction, StarForce, ClaimQuest, ...). Kept apart from
@@ -13,6 +14,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextChatService = game:GetService("TextChatService")
 local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -73,9 +75,37 @@ local function showNextCelebration()
 	end)
 end
 
+-- Mythic reforge: a white-to-crimson full-screen flash for the forger only.
+local function mythicFlash(color: Color3)
+	local layer: ScreenGui = K.create("ScreenGui", { Name = "RiftMythicFlash", DisplayOrder = 60, IgnoreGuiInset = true,
+		ResetOnSpawn = false }, player:WaitForChild("PlayerGui"))
+	local flash: Frame = K.create("Frame", { Size = UDim2.fromScale(1, 1), BorderSizePixel = 0, BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0 }, layer)
+	local tween = TweenService:Create(flash, TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ BackgroundColor3 = color, BackgroundTransparency = 1 })
+	tween.Completed:Connect(function()
+		layer:Destroy()
+	end)
+	tween:Play()
+	Sfx.Play("Forge_Success", 1)
+end
+
 local function celebrate(payload: any)
 	if type(payload) ~= "table" then
 		return
+	end
+	if payload.Kind == "Mythic" then
+		local color = if typeof(payload.Color) == "Color3" then payload.Color else K.COLORS.Bad
+		local channels = TextChatService:FindFirstChild("TextChannels")
+		local general = channels and channels:FindFirstChild("RBXGeneral")
+		if general and general:IsA("TextChannel") then
+			pcall(function()
+				general:DisplaySystemMessage(("<font color='#%s'><b>%s</b></font>"):format(color:ToHex(), tostring(payload.Body or "")))
+			end)
+		end
+		if payload.Forger == player.UserId then
+			mythicFlash(color)
+		end
 	end
 	table.insert(celebrateQueue, payload)
 	if not celebrating then
