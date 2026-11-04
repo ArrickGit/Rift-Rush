@@ -63,6 +63,7 @@ type PlayerCombat = {
 	DashRecharge: number,
 	InvulnUntil: number,
 	HurtUntil: number,
+	ContactImmuneUntil: number, -- body-contact hits only (game.md 2.4): longer than HurtUntil
 	ShadowStepUntil: number,
 	MomentumUntil: number,
 	Shield: number, -- HP absorbed before health (Seismic Impact, Frost Heart)
@@ -182,7 +183,8 @@ local ATTACK_LATENCY_CREDIT = 0.1 -- a basic attack may land this early without 
 local ABILITY_LATENCY_CREDIT = 0.1
 local MIN_REMOTE_GAP = 0.03
 local DASH_IFRAMES = 0.24
-local HURT_IFRAMES = 0.4
+local HURT_IFRAMES = 0.4 -- blocks every hit (projectiles, boss moves) after you get hurt
+local CONTACT_IFRAMES = 0.85 -- extra window that only blocks body-contact hits (game.md 2.4 / B25)
 local SHADOW_STEP_WINDOW = 0.22
 local SHADOW_STEP_SECONDS = 6
 local MOMENTUM_SECONDS = 3
@@ -396,6 +398,7 @@ local function newPlayerCombat(player: Player, runId: number, profile: PlayerPro
 		DashRecharge = 0,
 		InvulnUntil = 0,
 		HurtUntil = 0,
+		ContactImmuneUntil = 0,
 		ShadowStepUntil = 0,
 		MomentumUntil = 0,
 		Shield = 0,
@@ -881,7 +884,7 @@ local function hurt(player: Player, pc: PlayerCombat, humanoid: Humanoid, root: 
 end
 
 -- Hurts a player unless dash i-frames, post-hit i-frames, a Revive ForceField or death protect them.
-local function damagePlayer(player: Player, amount: number, _source: string): boolean
+local function damagePlayer(player: Player, amount: number, source: string): boolean
 	local pc = getPlayerCombat(player)
 	local humanoid = getHumanoid(player)
 	local root = getRoot(player)
@@ -892,9 +895,13 @@ local function damagePlayer(player: Player, amount: number, _source: string): bo
 	if now < pc.InvulnUntil or now < pc.HurtUntil or (player.Character and player.Character:FindFirstChildOfClass("ForceField")) then
 		return false
 	end
+	if source == "Contact" and now < pc.ContactImmuneUntil then
+		return false
+	end
 
 	hurt(player, pc, humanoid, root, amount, "Hurt")
 	pc.HurtUntil = now + HURT_IFRAMES
+	pc.ContactImmuneUntil = now + CONTACT_IFRAMES
 	fxRemote:FireClient(player, { Kind = "Shake", Intensity = 0.5, Duration = 0.25 })
 	return true
 end

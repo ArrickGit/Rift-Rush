@@ -124,6 +124,9 @@ local REVIVE_SHIELD_SECONDS = 4
 local OUT_OF_RUN_RESPAWN_SECONDS = 3
 local RESPAWN_TIME_OVERRIDE = 3600 -- we respawn players ourselves so the defeat screen can decide where they land
 local PARTY_SPAWN_SCALE_PER_PLAYER = 0.25
+-- Early-room mercy (game.md 2.4 / B25): World 1, Corruption 0, non-boss enemies hit softer in the first rooms and
+-- ramp back to full strength by Room 9. Index = room number; rooms past the table use 1.0.
+local EARLY_ATK_MULT: { number } = { 0.65, 0.65, 0.65, 0.65, 0.70, 0.78, 0.86, 0.93 }
 
 local RUN_ORIGIN = Vector3.new(2000, 300, 0)
 local RUN_SLOT_SPACING = 400
@@ -459,7 +462,9 @@ local function spawnEnemy(run: Run, room: ActiveRoom, position: Vector3, kind: E
 	model:SetAttribute("RunId", run.Id)
 	model:SetAttribute("MaxHP", maxHP)
 	model:SetAttribute("HP", maxHP)
-	model:SetAttribute("Attack", FormulaEngine.GetMonsterAttack(info.BaseAtk * atkMult, run.WorldIndex, run.Corruption, run.Depth))
+	local mercy = if run.WorldIndex == 1 and run.Corruption == 0 and kind ~= "Boss" then (EARLY_ATK_MULT[run.Depth] or 1) else 1
+	local attack = FormulaEngine.GetMonsterAttack(info.BaseAtk * atkMult, run.WorldIndex, run.Corruption, run.Depth)
+	model:SetAttribute("Attack", math.max(1, math.round(attack * mercy)))
 	model:SetAttribute("XPValue", math.round(info.BaseXP * xpMult))
 	CollectionService:AddTag(model, RunManagerService.ENEMY_TAG)
 

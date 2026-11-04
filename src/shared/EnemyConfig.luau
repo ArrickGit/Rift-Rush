@@ -49,9 +49,9 @@ local golemMoves: { MoveSpec } = {
 }
 
 local titanMoves: { MoveSpec } = {
-	{ Kind = "PoisonWave", Windup = 1.3, Recovery = 0.9, DamageMult = 1.3 },
+	{ Kind = "PoisonWave", Windup = 1.3, Recovery = 0.9, DamageMult = 1.15 },
 	{ Kind = "SporeBoulder", Windup = 0.9, Recovery = 0.7, DamageMult = 1.0, Speed = 38 },
-	{ Kind = "GroundPound", Windup = 1.1, Recovery = 1.0, DamageMult = 1.5, Range = 19 },
+	{ Kind = "GroundPound", Windup = 1.1, Recovery = 1.0, DamageMult = 1.3, Range = 19 },
 }
 
 local enemies: { [string]: EnemyInfo } = {
@@ -69,17 +69,17 @@ local enemies: { [string]: EnemyInfo } = {
 	},
 	SporeGolem = {
 		Id = "SporeGolem", Name = "Spore Golem", Archetype = "Boss",
-		BaseHP = 1200, BaseAtk = 25, BaseXP = 1500,
+		BaseHP = 1900, BaseAtk = 22, BaseXP = 1500,
 		MoveSpeed = 7, HopPower = 0, HopInterval = 0,
-		ContactMult = 0.6, ContactCooldown = 1.2,
+		ContactMult = 0.45, ContactCooldown = 1.5,
 		BossScale = 1.6, ThinkDelay = 1.2, EnrageAt = 0.5,
 		Moves = golemMoves,
 	},
 	MushroomTitan = {
 		Id = "MushroomTitan", Name = "Mushroom Titan", Archetype = "Boss",
-		BaseHP = 3600, BaseAtk = 40, BaseXP = 4000,
+		BaseHP = 3600, BaseAtk = 32, BaseXP = 4000,
 		MoveSpeed = 6, HopPower = 0, HopInterval = 0,
-		ContactMult = 0.6, ContactCooldown = 1.2,
+		ContactMult = 0.45, ContactCooldown = 1.5,
 		BossScale = 2.2, ThinkDelay = 1.1, EnrageAt = 0.5,
 		Moves = titanMoves,
 	},

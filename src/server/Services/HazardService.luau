@@ -1,7 +1,7 @@
 --!strict
 -- ServerScriptService/Server/Services/HazardService.luau
 -- "Floor is Lava" acid flood for Jump Quest rooms (game.md Section 33.5). Every HAZARD_TICK seconds, any living run
--- player whose root is at or below the acid surface (+1.5 studs) takes 8% of their Max HP as Poison damage and is
+-- player whose root is at or below the acid surface (+1.5 studs) takes 6% of their Max HP as Poison damage and is
 -- told to bounce: the client owns its character's physics, so it applies the upward launch and the green flash
 -- (CombatFx "PoisonBounce"); a server velocity write would just be overwritten.
 
@@ -14,9 +14,9 @@ local RunManagerService = require(script.Parent:WaitForChild("RunManagerService"
 
 local HazardService = {}
 
-local HAZARD_TICK = 0.4
+local HAZARD_TICK = 0.5
 local SURFACE_MARGIN = 1.5
-local DAMAGE_FRACTION = 0.08
+local DAMAGE_FRACTION = 0.06 -- 12% Max HP/s (was 8% per 0.4s = 20%/s)
 local BOUNCE_SPEED = 68
 
 local fxRemote: RemoteEvent

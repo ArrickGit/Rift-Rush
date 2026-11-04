@@ -261,7 +261,8 @@ Every weapon is physically welded into the character's right hand both in Town a
 | 2026-10-30 | `54cd527` | `game-like-ui` | **Bag** $\rightarrow$ **paper doll** (`BagScene.luau`). All 8 station windows are now visual scenes; `StationPanels` reduced from \~420 to 159 lines. | 
 | 2026-10-30 | `fa8630c` | `game-like-ui` | **Rift Gate** $\rightarrow$ **world map** (`RiftGateScene.luau`). | 
 | 2026-10-30 | `708eb77` | `game-like-ui` | **Settings & Credits screen** (`SettingsScene.luau`), fixing `B3` CC BY 3.0 attribution. | 
-| 2026-10-30 | *(latest)* | `game-like-ui` | **Fixed the 3 HUD glitches from 2.2** (`B11`, `B16`): Toasts stack at bottom-right beside open windows, Combo Counter moved to left under vitals, and `"Label"` flash eliminated. | 
+| 2026-10-30 | `72f11a6` | `game-like-ui` | **Fixed the 3 HUD glitches from 2.2** (`B11`, `B16`): Toasts stack at bottom-right beside open windows, Combo Counter moved to left under vitals, and `"Label"` flash eliminated. | 
+| 2026-11-04 | *(next commit)* | `main` | **Balance pass part 1 (B25, from the Section 7.2 sub-agent audit).** Idle Room 1 death went from ~12s to ~32s: body-contact hits now give 0.85s contact immunity (`CombatService` `CONTACT_IFRAMES`, other hits keep 0.4s), and World 1 / Corruption 0 normal enemies hit at 65% in Rooms 1–4 ramping to 100% by Room 9 (`RunManagerService` `EARLY_ATK_MULT`). Bosses: Spore Golem HP 1200→1900, Atk 25→22; Titan Atk 40→32, Pound ×1.5→1.3, Poison ×1.3→1.15; both contact ×0.6→0.45 every 1.5s. Acid 8% per 0.4s → 6% per 0.5s. **Weapon parity:** every Q cooldown now 5–9s (Greatsword 6, Staff 6, Hammer 7, Gauntlets 6, Bell 9) and single-target DPS lands at ~67–76 for all 8 (Daggers Q ×1.2, Bow base 20 + Rain ×1.0, Hammer Q ×1.8, Gauntlets finisher ×1.3 + Q ×4.5, Bell foxes 8s ×0.5, Cards base 26 + 2 bounces). *Note:* the 2.4 "8–10 hits to die" target contradicts "−35% damage + 0.85s immunity" (that combo gives ~34 hits); the two mechanical targets were used. Not yet playtested. | 
 
 ### 5.2 Technical Notes & Known Bugs Summary
 
@@ -271,7 +272,7 @@ Every weapon is physically welded into the character's right hand both in Town a
 
   * Roblox does not render `Rotation` on GuiObjects inside a `ClipsDescendants` scrolling frame; render rotating elements on `SceneKit.overlay()`.
 
-* **Open Bugs to Address:** `B1` (verify audio volumes in playtest), `B2` (group asset ownership if published under a group), `B8` (6 empty legacy sound slots), `B10` (**rotate Open Cloud API key**), `B25` (**idle player dies in 12s in Room 1 — fix in Step PL-4**), `B26` (add HUD shortcut button for Settings), `B27` (hide combo counter behind defeat screen).
+* **Open Bugs to Address:** `B1` (verify audio volumes in playtest), `B2` (group asset ownership if published under a group), `B8` (6 empty legacy sound slots), `B10` (**rotate Open Cloud API key**), `B25` (🟡 fixed in code 2026-11-04, needs a Room 1 / boss playtest), `B26` (add HUD shortcut button for Settings), `B27` (hide combo counter behind defeat screen).
 
 ---
 

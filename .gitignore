@@ -29,3 +29,6 @@ sourcemap.json
 # Research output (asset-sourcing notes and reports)
 /reports/
 /research_notes/
+
+# Personal Claude Code settings (not shared)
+/.claude/settings.local.json
