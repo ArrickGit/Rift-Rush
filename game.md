@@ -396,3 +396,34 @@ Read CLAUDE.md Sections 2, 6, and 7. Before editing any code, spawn 2 parallel r
 Once both sub-agents return their reports, review their findings as the Main Agent and implement the changes step-by-step while keeping all existing systems intact.
 
 ```
+### 7.4 Sub-Agent Results & Handoff (2026-11-04)
+
+Both sub-agents ran (read-only) and reported. **Done & pushed:** Sub-Agent 2's balance fixes (`bab6ba0`) and combat juice (`2b23979`) — see 5.1. **Next:** Sub-Agent 1's spec below, in this order: (A) 10 cards → (B) Reforge → (C) flex badges. Run `./luau-lsp analyze` after each, log in 5.1, commit + push.
+
+**Code facts the agents found (trust these over Sections 2/6):**
+* Upgrade offers are rolled and applied in **`CombatService`**, not RunManagerService: `rollCards`, `presentNextOffer`, `onUpgradeChosen`, `applyUpgrade`, `onRoomCleared` (boss rooms get no card offer). New card effects = `UpgradePoolConfig.Mods` keys (summed by `SumMods`) read as `ctx.Mods` / `pc.Mods` in CombatService.
+* `SUMMON_OFFSETS` has 3 slots (castSummon caps at it) → grow to 6 for Echo Chamber. Projectiles have no platform collision; the only bounce is enemy→enemy via `projectile.Bounces` (Trick Cards). Arcane Nova is Staff-only (`checkResonance`).
+* No "Reforge Token" currency exists (`LootBag` = Dust / BossCores / RelicShards) → use Dust + 1 Boss Core. No title/codex system → derive titles from `profile.Stats`. No chat integration → `Celebrate` remote + client `TextChatService` system message.
+* `makeParams` hardcodes `LinkSkillDmgBonus = 0`; `Corrupted` rarity has weight 1 but zero cards. `PlayerDataService.BumpStat` doesn't replicate (server must read `Stats.HighestRoom`).
+* UIController card icons may look up `Icons["Card_"..Id]`; new cards have no uploaded icon (check fallback to the emoji `Icon`).
+
+**(A) 10 screen-breaking cards.** *Started:* only the Mods-key comment in `UpgradePoolConfig.luau` is written; the card literal and all hooks are still to do.
+
+| Card | Rarity / Stacks | Mods | How (CombatService) |
+| :--- | :--- | :--- | :--- |
+| Gigantism | Legendary / 1 | `SizeMult=1.0, AdditiveDmg=0.40` | New `ctx.Size = min(2.5, 1+SizeMult)` in `makeAttackCtx`; multiply projectile half sizes, melee `reach`/`Height`, `ExplodeRadius`, rain width, pillar half sizes, uppercut range, summon bolt size. Send `Scale` in the `Proj` fx; client `projectileShape` scales fixed-size styles; `PlaySwing` range × `SizeScale` attribute. |
+| Echo Chamber | Epic / 1 | `EchoCast=1` | After `castAbility` in `onAttack`: `task.delay(0.25)` recast at ×0.85 with `isEcho=true` (skip hourglass pulse, card draw, SelfLaunch). Summons: count ×2 (max 6). |
+| Chain Reaction | Legendary / 1 | `ChainReaction=1` | In `killEnemy` queue a nova (`pendingNovas`); new `tickNovas` in Heartbeat: 8-stud blast ×0.60 × 0.9^gen, max 5 generations, ≤4 blasts/step, ≤10 victims, queue cap 40, Burst style `Nova`. |
+| Ricochet Frenzy | Rare / 2 | `Ricochet=2` | `Bounces += ric` on basic projectiles, ability projectiles, fox bolts. Melee hit → one Blade shard (×0.4, 0.25s cooldown, bounces = ric). (Wall bounces optional.) |
+| Golden Pinata | Epic / 2 | `PinataChance=0.20` | In `strikeEnemy` on crit: chance (cap 60%), 0.15s cooldown, 25/room; Dust `round((2+0.5·depth)·EcoMult)` batched into `RunManagerService.AddUnsecured` every 0.5s; new client fx `Pinata` (gold coin fountain). |
+| Afterimage | Epic / 1 | `Afterimage=1` | Basic attack repeats after 0.18s at ×0.5 (`opts.Echo`: no finisher count, shield, bell focus, momentum; Swing fx not excluded from owner). |
+| Meteor Shower | Legendary / 1 | `MeteorShower=1` | New `tickPeriodics`: every 6s up to 5 Fireball meteors on enemies within 40 studs (×1.2, Burn, radius 7·Size, falling from +26). |
+| Whirling Blades | Epic / 3 | `OrbitBlades=2` | Extend `tickOrbits`: blades (max 6) hit enemies within 6·Size studs for `0.35·blades·ORBIT_TICK` (≤12 victims). Publish `RunBlades` attribute; client draws cyan blades in `stepOrbits`. |
+| Prismatic Barrage | Rare / 2 | `BarrageBolts=8` | `tickPeriodics`: every 3.5s (enemy within 30) a ring of 8/stack (max 24) piercing bolts ×0.55, styles cycle Fireball/Lightning/Poison/Bolt/Spirit. |
+| Rift Overdrive | Rare / 2 | `AbilityCdr=0.25` | In `onAttack` cooldown: `*= 1 - min(0.6, AbilityCdr)`, floor 0.75s. |
+
+Shared infra first: per-run player-projectile cap 160 in `newProjectile` (decrement in `endProjectile`), drop non-crit damage numbers past 80 per flush in `queueNumber`, new PlayerCombat fields (`MeteorAt, BarrageAt, PinataAt, PinataDust, PinataFlushAt, PinataRoom, PinataDepth, ShardAt`), `SizeScale` / `RunBlades` player attributes set in `applyUpgrade`. Consider `BASE_WEIGHTS.Legendary` 4 → 6–8. Add a RiftDev `GiveUpgrade <id>` test command.
+
+**(B) Weapon Reforge (Blacksmith).** New `src/shared/ReforgeConfig.luau`: tiers Common *Sharp* 60% (+10% dmg) · Rare *Stormforged* 25% (+25% dmg, +10% atk speed) · Epic *Void-Touched* 10% (+50% dmg, +1 extra projectile / slash wave) · Legendary *Celestial* 4% (+100% dmg, +20% crit) · Mythic *Rift Sovereign* 1% (+200% dmg, +40% size). Pity: Epic+ by roll 13, Legendary+ by roll 60. Cost `200 + 25% of unlock price` Dust + 1 Boss Core. Profile `WeaponReforge: { [weaponId]: { Tier?, Rolls, PityEpic, PityLegend, Pending? } }` (default `{}`, add to `DICT_KEYS_NO_RECURSE`). Remote: new `LoadoutAction` actions `Reforge` / `ReforgeKeep` / `ReforgeDiscard` in InventoryService (first roll applies directly; later rolls go to `Pending` for keep/discard). Damage: optional `ReforgeDmg` in FormulaEngine `DamageParams`, `accountMult *= 1 + ReforgeDmg`; crit / atk speed / size via `makeAttackCtx` / `attackInterval`. Visuals in `WeaponHoldService` (`ReforgeFx_*` emitters: spark_01 / spark_04 + light / trace_02 trail + magic_01 / star_06 + gold Highlight + halo & wings in Town / Mythic crimson + fire_01, re-weld key includes tier). Mythic → `Celebrate:FireAllClients` (Kind "Mythic", flash for the forger, chat system message). UI: new `ReforgeSection.luau` under the Blacksmith detail card (current tier, odds + pity rows, cost chips, Reforge button, Keep New / Keep Current).
+
+**(C) Town flex badges.** New `FlexBadgeService` (server BillboardGui on the head, town only — hidden while `RunId` attribute is set): `[Rebirth V ⭐] Name` (or `[Lv N]` at Rebirth 0; export `RebirthService.ToRoman`), a title from stats (Mythic reforge → "Rift Sovereign", `BossKills ≥ 10` "Boss Breaker", `Kills ≥ 1000` "Mushroom Slayer", `HighestRoom ≥ 10` "Rift Delver"), and `🔥 Best: Room N` from `Stats.HighestRoom`. Refresh on CharacterAdded, `RebirthService.Rebirthed`, `RunId` attribute change, and after a reforge Keep.

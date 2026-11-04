@@ -11,6 +11,12 @@
 --   ExtraTargets  +targets per basic attack   BurnOnHit    stacks of Burn applied by every hit
 --   ShockOnHit    stacks of Shock applied     AbilityCasts +projectiles on the active ability (Triple Threat)
 --   AbilityTrail  abilities leave flames      BurnBlast    burning enemies explode on death
+-- Screen-breaking cards (game.md 6.2):
+--   SizeMult      +% size of attacks / pets   EchoCast     the active ability recasts (summons double)
+--   ChainReaction kills detonate (chains)     Ricochet     +bounces on projectiles, melee fires a shard
+--   PinataChance  crit chance to burst Dust   Afterimage   basic attacks repeat as a phantom
+--   MeteorShower  periodic meteor volleys     OrbitBlades  blades orbit and shred
+--   BarrageBolts  periodic ring of bolts      AbilityCdr   -% active ability cooldown
 
 export type Upgrade = {
 	Id: string,
